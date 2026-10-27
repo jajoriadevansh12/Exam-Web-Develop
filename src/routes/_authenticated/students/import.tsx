@@ -348,11 +348,11 @@ function ImportPage() {
                                       {change.field}:
                                     </span>
                                     <span className="line-through text-rose-600 dark:text-rose-400 bg-rose-50 dark:bg-rose-950/40 px-1.5 py-0.5 rounded text-[11px] border border-rose-200 dark:border-rose-900/40">
-                                      Pehle: {change.from || "Empty"}
+                                      Previous: {change.from || "Empty"}
                                     </span>
                                     <span className="text-muted-foreground">→</span>
                                     <span className="font-bold text-emerald-700 dark:text-emerald-400 bg-emerald-50 dark:bg-emerald-950/40 px-1.5 py-0.5 rounded text-[11px] border border-emerald-200 dark:border-emerald-900/40">
-                                      Ab: {change.to}
+                                      New: {change.to}
                                     </span>
                                   </div>
                                 ))}

@@ -543,11 +543,11 @@ function WorkbookForm() {
                             {d.field}:
                           </span>
                           <span className="line-through text-rose-600 dark:text-rose-400 bg-rose-500/10 px-1.5 py-0.5 rounded text-[11px]">
-                            Pehle: {d.oldValue}
+                            Previous: {d.oldValue}
                           </span>
                           <span className="text-muted-foreground">→</span>
                           <span className="font-bold text-emerald-700 dark:text-emerald-400 bg-emerald-500/10 px-1.5 py-0.5 rounded text-[11px]">
-                            Ab: {d.newValue}
+                            New: {d.newValue}
                           </span>
                         </div>
                       </label>

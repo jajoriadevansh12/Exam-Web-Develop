@@ -697,7 +697,7 @@ function ExamsPage() {
                 </div>
               ) : (
                 <p className="text-[11px] text-muted-foreground">
-                  👆 Pehle batch select karein — uske baad is batch ke subjects scroll list me load honge aur students count show hoga.
+                  👆 Select a batch above first — subjects and student counts will load automatically.
                 </p>
               )}
 
@@ -764,7 +764,7 @@ function ExamsPage() {
 
               {!primaryBatchId ? (
                 <div className="rounded-lg border border-dashed border-border bg-background/50 p-4 text-center text-xs text-muted-foreground">
-                  👆 Pehle upar Batch select karein — fir us batch ke subjects niche scroll down option me load honge.
+                  👆 Please select a batch above first — available subjects for this batch will load in the scroll-down menu.
                 </div>
               ) : (
                 <div className="space-y-2.5">
