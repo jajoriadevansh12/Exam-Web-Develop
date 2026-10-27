@@ -5,6 +5,7 @@ import { CheckCircle2, FileSpreadsheet, Loader2, Upload } from "lucide-react";
 import { toast } from "sonner";
 
 import { Button } from "@/components/ui/button";
+import { Checkbox } from "@/components/ui/checkbox";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import {
@@ -373,12 +374,13 @@ function RoomForm() {
 
 function WorkbookForm() {
   const [preview, setPreview] = useState<MasterPreview | null>(null);
+  const [approvedDiffs, setApprovedDiffs] = useState<Set<string>>(new Set());
   const [busy, setBusy] = useState(false);
 
   const apply = useMutation({
     mutationFn: () => {
       if (!preview) throw new Error("Choose a workbook first");
-      return applyMasterWorkbook(preview);
+      return applyMasterWorkbook(preview, approvedDiffs);
     },
     onSuccess: (result) => {
       toast.success(
@@ -397,7 +399,7 @@ function WorkbookForm() {
             { label: "Courses", value: preview.courses.length },
             { label: "Batches", value: preview.batches.length },
             { label: "Sections", value: preview.sections.length },
-            { label: "Subjects", value: preview.subjects.length },
+            { label: "Changes detected", value: preview.diffs?.length ?? 0 },
             { label: "Skipped rows", value: preview.skipped.length },
           ]
         : [],
@@ -407,9 +409,7 @@ function WorkbookForm() {
   return (
     <div className="space-y-4">
       <p className="text-sm text-muted-foreground">
-        Upload one workbook containing course, class/year, student and subject columns. Courses,
-        batches and sections are created automatically and every subject is merged onto the students
-        it belongs to — visible later on each student profile.
+        Upload one workbook containing course, class/year, student and subject columns. If any course or student already exists in the database, the system will show you the exact changes and let you choose whether to update or keep the existing previous data.
       </p>
 
       <label className="flex cursor-pointer flex-col items-center gap-2 rounded-lg border border-dashed border-border px-4 py-8 text-center transition-colors hover:bg-muted/40">
@@ -430,7 +430,9 @@ function WorkbookForm() {
             if (!file) return;
             setBusy(true);
             try {
-              setPreview(await parseMasterWorkbook(file));
+              const res = await parseMasterWorkbook(file);
+              setPreview(res);
+              setApprovedDiffs(new Set((res.diffs ?? []).map((d) => d.id)));
             } catch (error) {
               toast.error(error instanceof Error ? error.message : "Could not read the workbook");
             } finally {
@@ -454,6 +456,103 @@ function WorkbookForm() {
               </div>
             ))}
           </div>
+
+          {/* Diff Conflict Resolver Section */}
+          {preview.diffs && preview.diffs.length > 0 ? (
+            <div className="rounded-xl border border-amber-500/20 bg-amber-500/5 p-3.5 space-y-3">
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 border-b border-border/60 pb-2.5">
+                <div>
+                  <h4 className="text-xs font-bold text-foreground flex items-center gap-1.5">
+                    <span className="size-2 rounded-full bg-amber-500 animate-pulse" />
+                    Changes Detected in Existing Records ({preview.diffs.length})
+                  </h4>
+                  <p className="text-[11px] text-muted-foreground mt-0.5">
+                    Tick to apply the new Excel change, or untick to keep the previous database value.
+                  </p>
+                </div>
+                <div className="flex items-center gap-1.5 shrink-0">
+                  <Button
+                    type="button"
+                    size="sm"
+                    variant="outline"
+                    className="h-7 text-[11px] px-2.5"
+                    onClick={() => setApprovedDiffs(new Set(preview.diffs.map((d) => d.id)))}
+                  >
+                    Select All New
+                  </Button>
+                  <Button
+                    type="button"
+                    size="sm"
+                    variant="outline"
+                    className="h-7 text-[11px] px-2.5"
+                    onClick={() => setApprovedDiffs(new Set())}
+                  >
+                    Keep All Previous
+                  </Button>
+                </div>
+              </div>
+
+              <div className="max-h-56 overflow-y-auto divide-y divide-border/60 rounded-lg border border-border/60 bg-card">
+                {preview.diffs.map((d) => {
+                  const isChecked = approvedDiffs.has(d.id);
+                  return (
+                    <div
+                      key={d.id}
+                      className="p-2.5 flex items-start gap-3 hover:bg-muted/40 transition-colors"
+                    >
+                      <Checkbox
+                        id={d.id}
+                        checked={isChecked}
+                        onCheckedChange={(checked) => {
+                          setApprovedDiffs((prev) => {
+                            const next = new Set(prev);
+                            if (checked) next.add(d.id);
+                            else next.delete(d.id);
+                            return next;
+                          });
+                        }}
+                        className="mt-1"
+                      />
+                      <label htmlFor={d.id} className="flex-1 cursor-pointer space-y-1">
+                        <div className="flex items-center justify-between gap-2">
+                          <span className="font-semibold text-xs text-foreground">
+                            {d.identifier}
+                          </span>
+                          <span
+                            className={`text-[10px] px-2 py-0.5 rounded-full font-bold uppercase tracking-wider ${
+                              isChecked
+                                ? "bg-emerald-500/15 text-emerald-700 dark:text-emerald-400 border border-emerald-500/30"
+                                : "bg-muted text-muted-foreground border border-border"
+                            }`}
+                          >
+                            {isChecked ? "✓ Apply New Change" : "Keep Previous"}
+                          </span>
+                        </div>
+                        <div className="flex flex-wrap items-center gap-2 text-xs">
+                          <span className="font-medium text-muted-foreground text-[11px]">
+                            {d.field}:
+                          </span>
+                          <span className="line-through text-rose-600 dark:text-rose-400 bg-rose-500/10 px-1.5 py-0.5 rounded text-[11px]">
+                            Pehle: {d.oldValue}
+                          </span>
+                          <span className="text-muted-foreground">→</span>
+                          <span className="font-bold text-emerald-700 dark:text-emerald-400 bg-emerald-500/10 px-1.5 py-0.5 rounded text-[11px]">
+                            Ab: {d.newValue}
+                          </span>
+                        </div>
+                      </label>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          ) : (
+            <div className="rounded-lg border border-emerald-500/20 bg-emerald-500/5 p-3 text-xs text-emerald-700 dark:text-emerald-400 flex items-center gap-2">
+              <CheckCircle2 className="size-4 shrink-0" />
+              <span>No existing record clashes. All records are either new or completely up to date.</span>
+            </div>
+          )}
+
           {preview.subjects.length ? (
             <div className="flex flex-wrap gap-1.5">
               {preview.subjects.slice(0, 24).map((subject) => (
@@ -465,15 +564,11 @@ function WorkbookForm() {
                 </span>
               ))}
             </div>
-          ) : (
-            <p className="text-xs text-muted-foreground">
-              No subject columns detected — students will still be imported.
-            </p>
-          )}
+          ) : null}
         </>
       ) : null}
 
-      <div className="flex justify-end gap-2">
+      <div className="flex justify-end gap-2 border-t border-border pt-3">
         <Button variant="outline" onClick={() => window.close()}>
           Cancel
         </Button>
@@ -489,7 +584,7 @@ function WorkbookForm() {
 
       {apply.isSuccess ? (
         <p className="flex items-center gap-2 text-sm text-primary">
-          <CheckCircle2 className="size-4" /> Imported
+          <CheckCircle2 className="size-4" /> Imported successfully
         </p>
       ) : null}
     </div>

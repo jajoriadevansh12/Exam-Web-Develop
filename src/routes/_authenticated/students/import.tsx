@@ -277,16 +277,47 @@ function ImportPage() {
                           <td className="px-4 py-2.5">{entry.name}</td>
                           <td className="px-4 py-2.5 text-muted-foreground">{entry.email || "—"}</td>
                           <td className="px-4 py-2.5">
-                            <Badge variant={entry.kind === "new" ? "default" : "secondary"}>
-                              {entry.kind === "new" ? "New student" : "Updated"}
-                            </Badge>
+                            {entry.kind === "new" ? (
+                              <Badge variant="default" className="bg-primary/90 text-primary-foreground font-semibold">
+                                New Student
+                              </Badge>
+                            ) : (
+                              <Badge
+                                variant="outline"
+                                className={
+                                  approved.has(entry.key)
+                                    ? "border-emerald-500/40 bg-emerald-500/10 text-emerald-700 dark:text-emerald-400 font-semibold"
+                                    : "border-border bg-muted text-muted-foreground"
+                                }
+                              >
+                                {approved.has(entry.key) ? "✓ Will Update" : "Keeping Previous"}
+                              </Badge>
+                            )}
                           </td>
                           <td className="px-4 py-2.5 text-xs text-muted-foreground">
-                            {entry.kind === "new"
-                              ? `${entry.section || "Unassigned"}${entry.rollNumber ? ` · roll ${entry.rollNumber}` : ""}`
-                              : entry.changes
-                                  .map((change) => `${change.field}: ${change.from} → ${change.to}`)
-                                  .join("; ")}
+                            {entry.kind === "new" ? (
+                              <span>
+                                {entry.section || "Unassigned"}
+                                {entry.rollNumber ? ` · roll ${entry.rollNumber}` : ""}
+                              </span>
+                            ) : (
+                              <div className="space-y-1">
+                                {entry.changes.map((change, i) => (
+                                  <div key={i} className="flex flex-wrap items-center gap-1.5 text-xs">
+                                    <span className="font-semibold text-[10px] uppercase text-muted-foreground">
+                                      {change.field}:
+                                    </span>
+                                    <span className="line-through text-rose-600 dark:text-rose-400 bg-rose-50 dark:bg-rose-950/40 px-1.5 py-0.5 rounded text-[11px] border border-rose-200 dark:border-rose-900/40">
+                                      Pehle: {change.from || "Empty"}
+                                    </span>
+                                    <span className="text-muted-foreground">→</span>
+                                    <span className="font-bold text-emerald-700 dark:text-emerald-400 bg-emerald-50 dark:bg-emerald-950/40 px-1.5 py-0.5 rounded text-[11px] border border-emerald-200 dark:border-emerald-900/40">
+                                      Ab: {change.to}
+                                    </span>
+                                  </div>
+                                ))}
+                              </div>
+                            )}
                           </td>
                         </tr>
                       ))}

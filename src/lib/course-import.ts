@@ -19,6 +19,15 @@ export type MasterRow = {
   subjects: string[];
 };
 
+export type MasterDiff = {
+  id: string;
+  type: "course" | "student";
+  identifier: string;
+  field: string;
+  oldValue: string;
+  newValue: string;
+};
+
 export type MasterPreview = {
   fileName: string;
   totalRows: number;
@@ -29,6 +38,7 @@ export type MasterPreview = {
   sections: string[];
   subjects: string[];
   students: number;
+  diffs: MasterDiff[];
 };
 
 export type MasterApplyResult = {
@@ -214,6 +224,93 @@ export async function parseMasterWorkbook(file: File): Promise<MasterPreview> {
 
   const unique = (values: string[]) => [...new Set(values.filter(Boolean))].sort();
 
+  // Compute diffs against existing database records
+  const diffs: MasterDiff[] = [];
+
+  // 1. Check existing courses
+  const { data: dbCourses } = await supabase.from("courses").select("id, code, name");
+  const courseByCode = new Map((dbCourses ?? []).map((c) => [c.code.toUpperCase(), c]));
+  const seenCourseDiffs = new Set<string>();
+
+  for (const row of rows) {
+    if (!row.courseCode) continue;
+    const existing = courseByCode.get(row.courseCode);
+    if (existing && row.courseName && existing.name !== row.courseName && !seenCourseDiffs.has(row.courseCode)) {
+      seenCourseDiffs.add(row.courseCode);
+      diffs.push({
+        id: `course_${existing.id}_name`,
+        type: "course",
+        identifier: `Course: ${row.courseCode}`,
+        field: "Course Name",
+        oldValue: existing.name,
+        newValue: row.courseName,
+      });
+    }
+  }
+
+  // 2. Check existing students
+  const regNos = rows.map((r) => r.registrationNumber).filter(Boolean);
+  if (regNos.length > 0) {
+    const { data: dbStudents } = await supabase
+      .from("students")
+      .select("id, registration_number, roll_number, name, email, section_id, sections(name)")
+      .in("registration_number", regNos);
+
+    const studentByReg = new Map((dbStudents ?? []).map((s) => [s.registration_number, s]));
+    const seenStudentDiffs = new Set<string>();
+
+    for (const row of rows) {
+      const existing = studentByReg.get(row.registrationNumber);
+      if (!existing) continue;
+
+      if (row.name && existing.name !== row.name && !seenStudentDiffs.has(`${row.registrationNumber}_name`)) {
+        seenStudentDiffs.add(`${row.registrationNumber}_name`);
+        diffs.push({
+          id: `student_${existing.id}_name`,
+          type: "student",
+          identifier: `Student: ${row.registrationNumber}`,
+          field: "Student Name",
+          oldValue: existing.name,
+          newValue: row.name,
+        });
+      }
+      if (row.email && existing.email !== row.email && !seenStudentDiffs.has(`${row.registrationNumber}_email`)) {
+        seenStudentDiffs.add(`${row.registrationNumber}_email`);
+        diffs.push({
+          id: `student_${existing.id}_email`,
+          type: "student",
+          identifier: `Student: ${row.registrationNumber}`,
+          field: "Email Address",
+          oldValue: existing.email || "—",
+          newValue: row.email,
+        });
+      }
+      if (row.rollNumber && existing.roll_number !== row.rollNumber && !seenStudentDiffs.has(`${row.registrationNumber}_roll`)) {
+        seenStudentDiffs.add(`${row.registrationNumber}_roll`);
+        diffs.push({
+          id: `student_${existing.id}_roll`,
+          type: "student",
+          identifier: `Student: ${row.registrationNumber}`,
+          field: "Roll Number",
+          oldValue: existing.roll_number || "—",
+          newValue: row.rollNumber,
+        });
+      }
+      const existingSection = (existing.sections as { name: string } | null)?.name ?? "";
+      if (row.section && existingSection !== row.section && !seenStudentDiffs.has(`${row.registrationNumber}_section`)) {
+        seenStudentDiffs.add(`${row.registrationNumber}_section`);
+        diffs.push({
+          id: `student_${existing.id}_section`,
+          type: "student",
+          identifier: `Student: ${row.registrationNumber}`,
+          field: "Section",
+          oldValue: existingSection || "—",
+          newValue: row.section,
+        });
+      }
+    }
+  }
+
   return {
     fileName: file.name,
     totalRows: raw.length,
@@ -224,12 +321,16 @@ export async function parseMasterWorkbook(file: File): Promise<MasterPreview> {
     sections: unique(rows.map((row) => row.section)),
     subjects: unique(rows.flatMap((row) => row.subjects)),
     students: rows.length,
+    diffs,
   };
 }
 
 /** Creates missing courses, batches, sections, students and subjects, then merges
- *  each subject onto the students it belongs to. */
-export async function applyMasterWorkbook(preview: MasterPreview): Promise<MasterApplyResult> {
+ *  each subject onto the students it belongs to. Applies approved diffs. */
+export async function applyMasterWorkbook(
+  preview: MasterPreview,
+  approvedDiffIds?: Set<string>,
+): Promise<MasterApplyResult> {
   const result: MasterApplyResult = {
     courses: 0,
     batches: 0,
@@ -241,9 +342,32 @@ export async function applyMasterWorkbook(preview: MasterPreview): Promise<Maste
   if (preview.rows.length === 0) throw new Error("Nothing to import from this workbook.");
 
   /* courses */
-  const { data: courseRows, error: courseError } = await supabase.from("courses").select("id, code");
+  const { data: courseRows, error: courseError } = await supabase.from("courses").select("id, code, name");
   if (courseError) throw new Error(courseError.message);
   const courseMap = new Map((courseRows ?? []).map((row) => [row.code.toUpperCase(), row.id]));
+  const courseObjMap = new Map((courseRows ?? []).map((row) => [row.code.toUpperCase(), row]));
+
+  // Update existing courses if diff approved
+  if (approvedDiffIds && approvedDiffIds.size > 0) {
+    for (const diff of preview.diffs) {
+      if (diff.type === "course" && approvedDiffIds.has(diff.id)) {
+        const code = diff.identifier.replace("Course: ", "").trim().toUpperCase();
+        const existing = courseObjMap.get(code);
+        if (existing && diff.field === "Course Name") {
+          await supabase.from("courses").update({ name: diff.newValue }).eq("id", existing.id);
+          await logActivity({
+            entity_type: "course",
+            entity_id: existing.id,
+            entity_label: code,
+            action: "name updated by workbook import",
+            field_name: "name",
+            old_value: diff.oldValue,
+            new_value: diff.newValue,
+          });
+        }
+      }
+    }
+  }
 
   for (const row of preview.rows) {
     if (!row.courseCode || courseMap.has(row.courseCode)) continue;
@@ -320,20 +444,49 @@ export async function applyMasterWorkbook(preview: MasterPreview): Promise<Maste
   }
 
   /* students */
+  const { data: dbExistingStudents } = await supabase
+    .from("students")
+    .select("id, registration_number, roll_number, name, email, section_id, course_id, batch_id")
+    .in("registration_number", preview.rows.map((r) => r.registrationNumber));
+  const existingStudentMap = new Map((dbExistingStudents ?? []).map((s) => [s.registration_number, s]));
+
   const payload = preview.rows
     .map((row) => {
       const courseId = courseMap.get(row.courseCode);
       if (!courseId) return null;
       const batchId = batchMap.get(batchKey(courseId, row.batchName || "General"));
       if (!batchId) return null;
+
+      const existing = existingStudentMap.get(row.registrationNumber);
+
+      let finalName = row.name;
+      let finalEmail = row.email || null;
+      let finalRoll = row.rollNumber || null;
+      let finalSectionId = row.section ? (sectionMap.get(sectionKey(batchId, row.section)) ?? null) : null;
+
+      if (existing && approvedDiffIds) {
+        if (!approvedDiffIds.has(`student_${existing.id}_name`)) {
+          finalName = existing.name; // Keep previous
+        }
+        if (!approvedDiffIds.has(`student_${existing.id}_email`)) {
+          finalEmail = existing.email; // Keep previous
+        }
+        if (!approvedDiffIds.has(`student_${existing.id}_roll`)) {
+          finalRoll = existing.roll_number; // Keep previous
+        }
+        if (!approvedDiffIds.has(`student_${existing.id}_section`)) {
+          finalSectionId = existing.section_id; // Keep previous
+        }
+      }
+
       return {
         registration_number: row.registrationNumber,
-        roll_number: row.rollNumber || null,
-        name: row.name,
-        email: row.email || null,
+        roll_number: finalRoll,
+        name: finalName,
+        email: finalEmail,
         course_id: courseId,
         batch_id: batchId,
-        section_id: row.section ? (sectionMap.get(sectionKey(batchId, row.section)) ?? null) : null,
+        section_id: finalSectionId,
         status: "active",
       };
     })
