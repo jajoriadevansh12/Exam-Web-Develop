@@ -43,7 +43,7 @@ import {
 } from "@/components/ui/select";
 import { Skeleton } from "@/components/ui/skeleton";
 import { listBatches, listCourses } from "@/lib/db";
-import { listSubjects } from "@/lib/subjects";
+import { getDetailedSubjectStudentCounts, listSubjects } from "@/lib/subjects";
 import {
   deleteExam,
   getBatchStudentCounts,
@@ -139,6 +139,11 @@ function ExamsPage() {
     queryFn: () => listSubjects(),
   });
 
+  const { data: subjectCountData = { bySubjectId: {}, byCourseAndBatch: {} } } = useQuery({
+    queryKey: ["detailed_subject_student_counts"],
+    queryFn: getDetailedSubjectStudentCounts,
+  });
+
   const primaryBatch = useMemo(() => {
     const first = form.batchSelections[0];
     if (!first) return null;
@@ -147,42 +152,75 @@ function ExamsPage() {
 
   const primaryBatchId = primaryBatch?.id || "";
 
-  // Available subjects for the selected batch (from subjects table + past exam papers)
+  // Available subjects for the selected batch with exact student counts (handles MECH, ECOM, CSE branches)
   const batchSubjects = useMemo(() => {
     if (!primaryBatch) return [];
 
     const fromSubjects = allSubjects
-      .filter(
-        (s) =>
-          s.batch_id === primaryBatch.id ||
-          (!s.batch_id && s.course_id === primaryBatch.course_id),
-      )
-      .map((s) => ({
-        id: s.id,
-        code: s.code || "",
-        name: s.name,
-        label: s.code ? `[${s.code}] ${s.name}` : s.name,
-      }));
+      .filter((s) => {
+        if (s.batch_id && s.batch_id === primaryBatch.id) return true;
+        if (!s.batch_id && s.course_id === primaryBatch.course_id) return true;
+        if (s.batches?.name && s.batches.name.toLowerCase() === primaryBatch.name.toLowerCase()) return true;
+        return false;
+      })
+      .map((s) => {
+        // Exact student count for this specific subject
+        const count =
+          subjectCountData.bySubjectId[s.id] ??
+          (s.course_id ? subjectCountData.byCourseAndBatch[`${s.course_id}_${primaryBatch.id}`] : null) ??
+          batchCounts[primaryBatch.id] ??
+          0;
+
+        const branchCode = s.courses?.code || "";
+        const codePrefix = s.code ? `[${s.code}] ` : "";
+
+        return {
+          id: s.id,
+          code: s.code || "",
+          name: s.name,
+          studentCount: count,
+          branchCode,
+          label: `${codePrefix}${s.name}`,
+        };
+      });
 
     const seenNames = new Set(fromSubjects.map((s) => s.name.toLowerCase().trim()));
-    const fromExams: Array<{ id: string; code: string; name: string; label: string }> = [];
+    const fromExams: Array<{
+      id: string;
+      code: string;
+      name: string;
+      studentCount: number;
+      branchCode: string;
+      label: string;
+    }> = [];
 
     for (const e of exams) {
       const hasThisBatch = e.groups.some((g) => g.batch_id === primaryBatch.id);
       const paperName = (e.subjectName || e.name || "").trim();
       if (hasThisBatch && paperName && !seenNames.has(paperName.toLowerCase())) {
         seenNames.add(paperName.toLowerCase());
+        const count = e.totalStudents || batchCounts[primaryBatch.id] || 0;
         fromExams.push({
           id: `exam_${e.id}`,
           code: "",
           name: paperName,
+          studentCount: count,
+          branchCode: "",
           label: paperName,
         });
       }
     }
 
     return [...fromSubjects, ...fromExams];
-  }, [allSubjects, exams, primaryBatch]);
+  }, [allSubjects, exams, primaryBatch, subjectCountData, batchCounts]);
+
+  const selectedSubject = useMemo(() => {
+    if (!form.subjectName) return null;
+    return (
+      batchSubjects.find((s) => s.name.toLowerCase() === form.subjectName.toLowerCase().trim()) ||
+      null
+    );
+  }, [batchSubjects, form.subjectName]);
 
   // Collect distinct categories from both defaults and existing exams
   const allCategories = useMemo(() => {
@@ -248,6 +286,14 @@ function ExamsPage() {
   const totalFormStudents = useMemo(() => {
     return form.batchSelections.reduce((sum, b) => sum + (batchCounts[b.batch_id] || 0), 0);
   }, [form.batchSelections, batchCounts]);
+
+  // Exact student count for the chosen subject (handles MECH vs ECOM vs CS subject sizes)
+  const effectiveExamStudentCount = useMemo(() => {
+    if (selectedSubject && typeof selectedSubject.studentCount === "number" && selectedSubject.studentCount > 0) {
+      return selectedSubject.studentCount;
+    }
+    return totalFormStudents;
+  }, [selectedSubject, totalFormStudents]);
 
   // Save Exam with Batches Mutation
   const saveMutation = useMutation({
@@ -702,68 +748,114 @@ function ExamsPage() {
               )}
             </div>
 
-            {/* 2. Subject Selection (Filtered strictly by selected batch) */}
+            {/* 2. Subject Selection (Strictly Scroll Down Menu with Student Counts) */}
             <div className="space-y-2 rounded-xl border border-border bg-muted/15 p-3.5">
-              <Label htmlFor="subject-name" className="text-xs font-semibold uppercase tracking-wider text-foreground flex items-center gap-1.5">
-                <BookOpen className="size-3.5 text-primary" />
-                <span>2. Subject / Exam Paper Name *</span>
-              </Label>
+              <div className="flex items-center justify-between">
+                <Label htmlFor="subject-name" className="text-xs font-semibold uppercase tracking-wider text-foreground flex items-center gap-1.5">
+                  <BookOpen className="size-3.5 text-primary" />
+                  <span>2. Select Subject (Scroll Down) *</span>
+                </Label>
+                {selectedSubject && (
+                  <Badge variant="outline" className="font-mono text-[11px] bg-primary/10 text-primary border-primary/25">
+                    👥 {effectiveExamStudentCount} Students Enrolled
+                  </Badge>
+                )}
+              </div>
 
               {!primaryBatchId ? (
                 <div className="rounded-lg border border-dashed border-border bg-background/50 p-4 text-center text-xs text-muted-foreground">
-                  👆 Pehle upar Batch select karein — fir us batch ke subjects niche scroll option me open honge.
+                  👆 Pehle upar Batch select karein — fir us batch ke subjects niche scroll down option me load honge.
                 </div>
               ) : (
-                <div className="space-y-2">
-                  {batchSubjects.length > 0 ? (
-                    <div className="space-y-1.5">
-                      <Select
-                        value={
-                          batchSubjects.some((s) => s.name === form.subjectName)
-                            ? form.subjectName
-                            : form.subjectName
-                              ? "__custom__"
-                              : ""
-                        }
-                        onValueChange={(val) => {
-                          if (val === "__custom__") {
-                            setForm((prev) => ({ ...prev, subjectName: "" }));
-                          } else {
-                            setForm((prev) => ({ ...prev, subjectName: val }));
-                          }
-                        }}
-                      >
-                        <SelectTrigger className="w-full bg-background font-medium">
-                          <SelectValue placeholder={`-- Scroll & pick subject (${batchSubjects.length} available) --`} />
-                        </SelectTrigger>
-                        <SelectContent className="max-h-60 overflow-y-auto">
-                          {batchSubjects.map((s) => (
-                            <SelectItem key={s.id} value={s.name}>
-                              {s.label}
-                            </SelectItem>
-                          ))}
-                          <SelectItem value="__custom__" className="text-primary font-semibold border-t border-border mt-1 pt-1">
-                            ✏️ + Type custom / new paper name...
+                <div className="space-y-2.5">
+                  {/* Clean Scroll-Down Menu */}
+                  <Select
+                    value={
+                      batchSubjects.some((s) => s.name === form.subjectName)
+                        ? form.subjectName
+                        : form.subjectName
+                          ? "__custom__"
+                          : ""
+                    }
+                    onValueChange={(val) => {
+                      if (val === "__custom__") {
+                        setForm((prev) => ({ ...prev, subjectName: "" }));
+                      } else {
+                        setForm((prev) => ({ ...prev, subjectName: val }));
+                      }
+                    }}
+                  >
+                    <SelectTrigger className="w-full bg-background font-medium h-10">
+                      <SelectValue placeholder={`-- Scroll down & select subject (${batchSubjects.length} available) --`} />
+                    </SelectTrigger>
+                    <SelectContent className="max-h-72 overflow-y-auto">
+                      {batchSubjects.length === 0 ? (
+                        <div className="p-3 text-xs text-muted-foreground text-center">
+                          No pre-registered subjects found for this batch. Choose custom option below:
+                        </div>
+                      ) : (
+                        batchSubjects.map((s) => (
+                          <SelectItem key={s.id} value={s.name} className="py-2.5">
+                            <div className="flex items-center justify-between w-full gap-4 text-xs">
+                              <span className="font-medium text-foreground">
+                                {s.label}
+                              </span>
+                              <span className="font-mono font-semibold text-primary bg-primary/10 px-2 py-0.5 rounded text-[11px] shrink-0">
+                                {s.studentCount} students {s.branchCode ? `(${s.branchCode})` : ""}
+                              </span>
+                            </div>
                           </SelectItem>
-                        </SelectContent>
-                      </Select>
+                        ))
+                      )}
+                      <SelectItem value="__custom__" className="text-primary font-semibold border-t border-border mt-1 pt-1.5">
+                        ✏️ + Type custom / other paper name...
+                      </SelectItem>
+                    </SelectContent>
+                  </Select>
+
+                  {/* Input ONLY shown if user explicitly chooses custom paper or no subjects found */}
+                  {(!batchSubjects.some((s) => s.name === form.subjectName) || batchSubjects.length === 0) && (
+                    <div className="space-y-1 pt-1">
+                      <Input
+                        id="subject-name"
+                        placeholder="Type custom subject name (e.g. Thermodynamics, Fluid Mechanics, Web Tech)..."
+                        value={form.subjectName}
+                        onChange={(e) => setForm({ ...form, subjectName: e.target.value })}
+                        className="bg-background text-sm"
+                        autoFocus
+                      />
                       <p className="text-[11px] text-muted-foreground">
-                        Dropdown me se subject pick karein ya niche edit karein:
+                        Custom subject / paper name specified.
                       </p>
                     </div>
-                  ) : (
-                    <p className="text-[11px] text-amber-700 dark:text-amber-400">
-                      ℹ️ Is batch ke liye koi pre-saved subject nahi mila. Aap niche subject name manually likh sakte hain:
-                    </p>
                   )}
 
-                  <Input
-                    id="subject-name"
-                    placeholder="e.g. Computer Networks, Database Management Systems, CS301..."
-                    value={form.subjectName}
-                    onChange={(e) => setForm({ ...form, subjectName: e.target.value })}
-                    className="bg-background"
-                  />
+                  {/* Live Subject & Enrolled Student Count Highlight Card */}
+                  {form.subjectName && (
+                    <div className="rounded-lg border border-primary/25 bg-primary/5 p-3 flex items-center justify-between text-xs">
+                      <div className="space-y-0.5">
+                        <span className="text-[10px] uppercase font-bold tracking-wider text-muted-foreground">
+                          Selected Paper:
+                        </span>
+                        <p className="font-semibold text-foreground text-sm flex items-center gap-1.5">
+                          <span>{form.subjectName}</span>
+                          {selectedSubject?.branchCode && (
+                            <Badge variant="secondary" className="text-[10px] py-0 px-1.5">
+                              {selectedSubject.branchCode}
+                            </Badge>
+                          )}
+                        </p>
+                      </div>
+                      <div className="text-right">
+                        <span className="font-mono font-bold text-primary text-base block">
+                          {effectiveExamStudentCount}
+                        </span>
+                        <span className="text-[10px] text-muted-foreground uppercase font-medium">
+                          Students appearing
+                        </span>
+                      </div>
+                    </div>
+                  )}
                 </div>
               )}
             </div>

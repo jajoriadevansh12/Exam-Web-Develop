@@ -51,3 +51,39 @@ export async function countSubjectStudents(subjectIds: string[]) {
     return acc;
   }, {});
 }
+
+/** Detailed subject student counts including student_subjects mapping and course/batch counts */
+export async function getDetailedSubjectStudentCounts(): Promise<{
+  bySubjectId: Record<string, number>;
+  byCourseAndBatch: Record<string, number>;
+}> {
+  // 1. Exact mapping from student_subjects
+  const { data: mappingData } = await supabase
+    .from("student_subjects")
+    .select("subject_id")
+    .range(0, 49999);
+
+  const bySubjectId: Record<string, number> = {};
+  for (const row of mappingData || []) {
+    if (row.subject_id) {
+      bySubjectId[row.subject_id] = (bySubjectId[row.subject_id] || 0) + 1;
+    }
+  }
+
+  // 2. Active students grouped by course_id and batch_id (e.g. Mechanical vs E-Com)
+  const { data: studentData } = await supabase
+    .from("students")
+    .select("course_id, batch_id")
+    .eq("status", "active")
+    .range(0, 49999);
+
+  const byCourseAndBatch: Record<string, number> = {};
+  for (const s of studentData || []) {
+    if (s.course_id && s.batch_id) {
+      const key = `${s.course_id}_${s.batch_id}`;
+      byCourseAndBatch[key] = (byCourseAndBatch[key] || 0) + 1;
+    }
+  }
+
+  return { bySubjectId, byCourseAndBatch };
+}
