@@ -49,12 +49,26 @@ const HEADER_ALIASES: Record<string, keyof Omit<ExcelStudentRow, "rowNumber">> =
   "student name": "name",
   name: "name",
   studentname: "name",
+  "candidate name": "name",
   email: "email",
   "student email": "email",
   "email id": "email",
   emailid: "email",
   "email address": "email",
+  emailaddress: "email",
+  "e mail": "email",
+  "e mail id": "email",
+  "e mail address": "email",
   mail: "email",
+  "mail id": "email",
+  mailid: "email",
+  "official email": "email",
+  "college email": "email",
+  "institute email": "email",
+  "contact email": "email",
+  "personal email": "email",
+  webmail: "email",
+  gmail: "email",
   section: "section",
   "section name": "section",
 };
@@ -73,7 +87,9 @@ export function matchStudentField(rawHeader: string): keyof Omit<ExcelStudentRow
     norm.includes("mail id") ||
     norm.includes("mailid") ||
     norm === "mail" ||
-    norm.includes("gmail")
+    norm.endsWith("mail") ||
+    norm.includes("gmail") ||
+    norm.includes("webmail")
   ) {
     return "email";
   }

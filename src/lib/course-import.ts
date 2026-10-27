@@ -84,7 +84,20 @@ const SINGLE: Record<string, keyof MasterRow> = {
   "email id": "email",
   emailid: "email",
   "email address": "email",
+  emailaddress: "email",
+  "e mail": "email",
+  "e mail id": "email",
+  "e mail address": "email",
   mail: "email",
+  "mail id": "email",
+  mailid: "email",
+  "official email": "email",
+  "college email": "email",
+  "institute email": "email",
+  "contact email": "email",
+  "personal email": "email",
+  webmail: "email",
+  gmail: "email",
 };
 
 function normalizeHeader(header: string) {
@@ -101,7 +114,9 @@ function matchMasterField(rawHeader: string): keyof MasterRow | undefined {
     norm.includes("mail id") ||
     norm.includes("mailid") ||
     norm === "mail" ||
-    norm.includes("gmail")
+    norm.endsWith("mail") ||
+    norm.includes("gmail") ||
+    norm.includes("webmail")
   ) {
     return "email";
   }
@@ -203,6 +218,10 @@ export async function parseMasterWorkbook(file: File): Promise<MasterPreview> {
     );
     if (!name || !registrationNumber) {
       skipped.push({ rowNumber, reason: !name ? "Missing student name" : "Missing registration/roll number" });
+      return;
+    }
+    if (!email || !email.includes("@")) {
+      skipped.push({ rowNumber, reason: "Missing or invalid email address" });
       return;
     }
 
