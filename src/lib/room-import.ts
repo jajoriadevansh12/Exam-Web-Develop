@@ -51,49 +51,41 @@ export type RoomImportPreview = {
 };
 
 function normalizeHeader(header: string): string {
-  return header.toLowerCase().replace(/[._-]/g, " ").replace(/\s+/g, " ").trim();
+  return String(header ?? "")
+    .toLowerCase()
+    .replace(/[^a-z0-9]/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
 }
 
 function matchRoomField(rawHeader: string): string | undefined {
   const norm = normalizeHeader(rawHeader);
 
+  // Ignore serial numbers
   if (
-    norm.includes("building") ||
-    norm === "block" ||
-    norm === "bldg" ||
-    norm.includes("complex") ||
-    norm.includes("wing")
+    norm === "s no" ||
+    norm === "sr no" ||
+    norm === "sl no" ||
+    norm === "no" ||
+    norm === "s n" ||
+    norm === "serial no"
   ) {
-    return "building";
+    return undefined;
   }
 
-  if (norm.includes("floor") || norm === "level" || norm === "flr") {
-    return "floor";
-  }
-
+  // Capacity / Total Seats (Check first to avoid collision with 'Seats per room')
   if (
-    norm.includes("classroom") ||
-    norm.includes("room") ||
-    norm.includes("hall") ||
-    norm === "class" ||
-    norm === "room no" ||
-    norm === "room number" ||
-    norm === "hall no"
+    norm.includes("capacity") ||
+    norm.includes("total capacity") ||
+    norm.includes("total seats") ||
+    norm === "seats" ||
+    norm === "total" ||
+    norm.includes("max capacity")
   ) {
-    return "classroom";
+    return "capacity";
   }
 
-  if (
-    norm === "rows" ||
-    norm === "row" ||
-    norm.includes("row count") ||
-    norm.includes("no of rows") ||
-    norm.includes("no. of rows") ||
-    norm === "total rows"
-  ) {
-    return "rows";
-  }
-
+  // Seats Per Row / Columns (Check before classroom)
   if (
     norm.includes("seats per row") ||
     norm.includes("seats/row") ||
@@ -107,15 +99,51 @@ function matchRoomField(rawHeader: string): string | undefined {
     return "seatsPerRow";
   }
 
+  // Rows
   if (
-    norm.includes("capacity") ||
-    norm.includes("total capacity") ||
-    norm.includes("total seats") ||
-    norm === "seats" ||
-    norm === "total" ||
-    norm.includes("max capacity")
+    norm === "rows" ||
+    norm === "row" ||
+    norm.includes("row count") ||
+    norm.includes("no of rows") ||
+    norm.includes("no. of rows") ||
+    norm === "total rows"
   ) {
-    return "capacity";
+    return "rows";
+  }
+
+  // Building / Block / Wing
+  if (
+    norm.includes("building") ||
+    norm === "block" ||
+    norm === "bldg" ||
+    norm.includes("complex") ||
+    norm.includes("wing")
+  ) {
+    return "building";
+  }
+
+  // Floor
+  if (norm.includes("floor") || norm === "level" || norm === "flr") {
+    return "floor";
+  }
+
+  // Classroom / Room / Hall (Exclude if contains capacity or seat)
+  if (
+    (norm.includes("classroom") ||
+      norm.includes("room") ||
+      norm.includes("hall") ||
+      norm === "class" ||
+      norm === "room no" ||
+      norm === "room number" ||
+      norm === "hall no" ||
+      norm === "lt" ||
+      norm.includes("lecture hall")) &&
+    !norm.includes("capacity") &&
+    !norm.includes("seat") &&
+    !norm.includes("row") &&
+    !norm.includes("col")
+  ) {
+    return "classroom";
   }
 
   return undefined;
@@ -152,11 +180,12 @@ export async function parseRoomsWorkbook(
   raw.forEach((record, index) => {
     const mapped: Record<string, string> = {};
 
+    // Scan headers in ANY order
     for (const [header, value] of Object.entries(record)) {
       const text = String(value ?? "").trim();
       if (!text) continue;
       const field = matchRoomField(header);
-      if (field) mapped[field] = text;
+      if (field && !mapped[field]) mapped[field] = text;
     }
 
     const building = (mapped["building"] || "Main").trim();

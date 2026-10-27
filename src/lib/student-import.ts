@@ -36,22 +36,93 @@ export type SyncPreview = {
 };
 
 const HEADER_ALIASES: Record<string, keyof Omit<ExcelStudentRow, "rowNumber">> = {
+  // Registration Number / Enrollment / Admission
   "registration number": "registrationNumber",
   "registration no": "registrationNumber",
+  "registration": "registrationNumber",
   "reg number": "registrationNumber",
   "reg no": "registrationNumber",
   regno: "registrationNumber",
+  "reg_no": "registrationNumber",
+  "reg-no": "registrationNumber",
   registrationnumber: "registrationNumber",
+  "enrollment number": "registrationNumber",
+  "enrollment no": "registrationNumber",
+  "enrollment": "registrationNumber",
+  "enroll no": "registrationNumber",
+  "enrolment number": "registrationNumber",
+  "enrolment no": "registrationNumber",
+  "enrolment": "registrationNumber",
+  "enrol no": "registrationNumber",
+  enrollmentno: "registrationNumber",
+  enrolmentno: "registrationNumber",
+  "admission number": "registrationNumber",
+  "admission no": "registrationNumber",
+  "admission id": "registrationNumber",
+  admission: "registrationNumber",
+  "scholar number": "registrationNumber",
+  "scholar no": "registrationNumber",
+  "scholar id": "registrationNumber",
+  scholar: "registrationNumber",
+  "student id": "registrationNumber",
+  "student id number": "registrationNumber",
+  studentid: "registrationNumber",
+  "student_id": "registrationNumber",
+  "id number": "registrationNumber",
+  "univ reg no": "registrationNumber",
+  "university reg no": "registrationNumber",
+  "university registration number": "registrationNumber",
+  "reg id": "registrationNumber",
+
+  // Roll Number
   "roll number": "rollNumber",
   "roll no": "rollNumber",
   rollno: "rollNumber",
   rollnumber: "rollNumber",
+  roll: "rollNumber",
+  "roll_no": "rollNumber",
+  "roll-no": "rollNumber",
+  "class roll no": "rollNumber",
+  "class roll number": "rollNumber",
+  "class roll": "rollNumber",
+  "univ roll no": "rollNumber",
+  "university roll no": "rollNumber",
+  "university roll number": "rollNumber",
+  "exam roll no": "rollNumber",
+  "exam roll number": "rollNumber",
+  "student roll no": "rollNumber",
+  "student roll number": "rollNumber",
+  "r no": "rollNumber",
+  rno: "rollNumber",
+  "r_no": "rollNumber",
+
+  // Name
   "student name": "name",
   name: "name",
   studentname: "name",
   "candidate name": "name",
+  "full name": "name",
+  fullname: "name",
+  "student full name": "name",
+  "student fullname": "name",
+  "student s name": "name",
+  "students name": "name",
+  "candidate s name": "name",
+  "candidates name": "name",
+  "name of student": "name",
+  "name of the student": "name",
+  "name of candidate": "name",
+  student: "name",
+  candidate: "name",
+  "applicant name": "name",
+  "pupil name": "name",
+  "learner name": "name",
+
+  // Email
   email: "email",
   "student email": "email",
+  "student s email": "email",
+  "student email id": "email",
   "email id": "email",
   emailid: "email",
   "email address": "email",
@@ -63,24 +134,55 @@ const HEADER_ALIASES: Record<string, keyof Omit<ExcelStudentRow, "rowNumber">> =
   "mail id": "email",
   mailid: "email",
   "official email": "email",
+  "official email id": "email",
   "college email": "email",
   "institute email": "email",
+  "university email": "email",
   "contact email": "email",
   "personal email": "email",
   webmail: "email",
   gmail: "email",
+
+  // Section
   section: "section",
   "section name": "section",
+  "section no": "section",
+  sec: "section",
+  "sec name": "section",
+  "class section": "section",
+  division: "section",
+  div: "section",
+  "class division": "section",
+  classroom: "section",
+  group: "section",
 };
 
 function normalizeHeader(header: string) {
-  return header.toLowerCase().replace(/[._-]/g, " ").replace(/\s+/g, " ").trim();
+  return String(header ?? "")
+    .toLowerCase()
+    .replace(/[^a-z0-9]/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
 }
 
 export function matchStudentField(rawHeader: string): keyof Omit<ExcelStudentRow, "rowNumber"> | undefined {
   const norm = normalizeHeader(rawHeader);
   if (HEADER_ALIASES[norm]) return HEADER_ALIASES[norm];
 
+  // Ignore serial numbers so they never conflict with roll or registration
+  if (
+    norm === "s no" ||
+    norm === "sr no" ||
+    norm === "sl no" ||
+    norm === "no" ||
+    norm === "s n" ||
+    norm === "serial no" ||
+    norm === "index"
+  ) {
+    return undefined;
+  }
+
+  // Email detection
   if (
     norm.includes("email") ||
     norm.includes("e mail") ||
@@ -94,25 +196,80 @@ export function matchStudentField(rawHeader: string): keyof Omit<ExcelStudentRow
     return "email";
   }
 
+  // Registration / Enrollment / Admission
   if (
     norm.includes("registration") ||
     norm.includes("enroll") ||
+    norm.includes("enrol") ||
     norm.startsWith("reg") ||
-    norm.includes("admission no")
+    norm.includes("reg no") ||
+    norm.includes("admission") ||
+    norm.includes("scholar") ||
+    norm.includes("student id") ||
+    norm === "id"
   ) {
     return "registrationNumber";
   }
 
-  if (norm.includes("roll")) {
+  // Roll Number
+  if (
+    norm.includes("roll") ||
+    norm === "r no" ||
+    norm === "rno"
+  ) {
     return "rollNumber";
   }
 
-  if (norm.includes("name") || norm === "student" || norm === "candidate") {
-    return "name";
+  // Section / Class / Division
+  if (
+    norm.includes("section") ||
+    norm === "sec" ||
+    norm.startsWith("sec ") ||
+    norm.endsWith(" sec") ||
+    norm.includes("division") ||
+    norm === "div" ||
+    (norm.includes("class") && !norm.includes("roll") && !norm.includes("name"))
+  ) {
+    return "section";
   }
 
-  if (norm.includes("section") || norm === "sec" || norm.includes("class")) {
-    return "section";
+  // Student Name (strictly exclude other non-student entities)
+  const EXCLUDED_WORDS = [
+    "course",
+    "batch",
+    "section",
+    "subject",
+    "paper",
+    "father",
+    "mother",
+    "parent",
+    "guardian",
+    "college",
+    "school",
+    "institute",
+    "university",
+    "department",
+    "dept",
+    "teacher",
+    "faculty",
+    "professor",
+    "file",
+    "room",
+    "hall",
+    "exam",
+  ];
+  const hasExcludedWord = EXCLUDED_WORDS.some((word) => norm.includes(word));
+
+  if (!hasExcludedWord) {
+    if (
+      norm.includes("name") ||
+      norm === "student" ||
+      norm === "candidate" ||
+      norm.includes("candidate") ||
+      norm.includes("student")
+    ) {
+      return "name";
+    }
   }
 
   return undefined;
@@ -148,23 +305,28 @@ export async function parseStudentWorkbook(file: File): Promise<ExcelStudentRow[
     const mapped: Record<string, string> = {};
     let fallbackEmail: string | undefined = undefined;
 
+    // Scan headers in ANY order; don't overwrite specific match with a generic one
     for (const [header, value] of Object.entries(record)) {
       const text = String(value ?? "").trim();
       if (!text) continue;
 
       const field = matchStudentField(header);
       if (field) {
-        mapped[field] = text;
+        if (!mapped[field]) {
+          mapped[field] = text;
+        }
       } else if (!fallbackEmail && text.includes("@") && /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(text)) {
         fallbackEmail = text.toLowerCase();
       }
     }
 
     const emailVal = (mapped["email"] || fallbackEmail || "").trim().toLowerCase();
+    const rawReg = (mapped["registrationNumber"] || mapped["rollNumber"] || "").trim();
+    const rawRoll = (mapped["rollNumber"] || mapped["registrationNumber"] || "").trim();
 
     return {
-      registrationNumber: normalizeRegistrationNumber(mapped["registrationNumber"] ?? ""),
-      rollNumber: mapped["rollNumber"] ?? "",
+      registrationNumber: normalizeRegistrationNumber(rawReg),
+      rollNumber: rawRoll,
       name: (mapped["name"] ?? "").replace(/\s+/g, " ").trim(),
       email: emailVal || undefined,
       section: normalizeSectionName(mapped["section"] ?? ""),

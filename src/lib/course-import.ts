@@ -51,36 +51,148 @@ export type MasterApplyResult = {
 };
 
 const SINGLE: Record<string, keyof MasterRow> = {
+  // Course
   course: "courseName",
   "course name": "courseName",
+  coursename: "courseName",
+  "course_name": "courseName",
   programme: "courseName",
   program: "courseName",
+  "programme name": "courseName",
+  "program name": "courseName",
+  degree: "courseName",
+  "degree name": "courseName",
+  branch: "courseName",
+  "branch name": "courseName",
+  department: "courseName",
+  dept: "courseName",
+  stream: "courseName",
+
+  // Course Code
   "course code": "courseCode",
   coursecode: "courseCode",
+  "course_code": "courseCode",
+  "program code": "courseCode",
+  "programme code": "courseCode",
+  "degree code": "courseCode",
+  "branch code": "courseCode",
   code: "courseCode",
+
+  // Batch
   batch: "batchName",
   "batch name": "batchName",
+  batchname: "batchName",
+  "batch_name": "batchName",
+  "batch year": "batchName",
   year: "batchName",
   "academic year": "batchName",
+  "class year": "batchName",
+  session: "batchName",
+  cohort: "batchName",
+  "admission year": "batchName",
+
+  // Section
   class: "section",
   "class name": "section",
   section: "section",
   "section name": "section",
+  "section no": "section",
+  sec: "section",
+  "sec name": "section",
+  "class section": "section",
+  division: "section",
+  div: "section",
+  "class division": "section",
+  classroom: "section",
+  group: "section",
+
+  // Registration Number / Enrollment / Admission
   "registration number": "registrationNumber",
   "registration no": "registrationNumber",
+  "registration": "registrationNumber",
   "reg no": "registrationNumber",
   "reg number": "registrationNumber",
   regno: "registrationNumber",
+  "reg_no": "registrationNumber",
+  "reg-no": "registrationNumber",
   registrationnumber: "registrationNumber",
+  "enrollment number": "registrationNumber",
+  "enrollment no": "registrationNumber",
+  "enrollment": "registrationNumber",
+  "enroll no": "registrationNumber",
+  "enrolment number": "registrationNumber",
+  "enrolment no": "registrationNumber",
+  "enrolment": "registrationNumber",
+  "enrol no": "registrationNumber",
+  enrollmentno: "registrationNumber",
+  enrolmentno: "registrationNumber",
+  "admission number": "registrationNumber",
+  "admission no": "registrationNumber",
+  "admission id": "registrationNumber",
+  admission: "registrationNumber",
+  "scholar number": "registrationNumber",
+  "scholar no": "registrationNumber",
+  "scholar id": "registrationNumber",
+  scholar: "registrationNumber",
+  "student id": "registrationNumber",
+  "student id number": "registrationNumber",
+  studentid: "registrationNumber",
+  "student_id": "registrationNumber",
+  "id number": "registrationNumber",
+  "univ reg no": "registrationNumber",
+  "university reg no": "registrationNumber",
+  "university registration number": "registrationNumber",
+  "reg id": "registrationNumber",
+
+  // Roll Number
   "roll number": "rollNumber",
   "roll no": "rollNumber",
   rollno: "rollNumber",
   rollnumber: "rollNumber",
+  roll: "rollNumber",
+  "roll_no": "rollNumber",
+  "roll-no": "rollNumber",
+  "class roll no": "rollNumber",
+  "class roll number": "rollNumber",
+  "class roll": "rollNumber",
+  "univ roll no": "rollNumber",
+  "university roll no": "rollNumber",
+  "university roll number": "rollNumber",
+  "exam roll no": "rollNumber",
+  "exam roll number": "rollNumber",
+  "student roll no": "rollNumber",
+  "student roll number": "rollNumber",
+  "r no": "rollNumber",
+  rno: "rollNumber",
+  "r_no": "rollNumber",
+
+  // Name
   name: "name",
   "student name": "name",
   studentname: "name",
+  "candidate name": "name",
+  "full name": "name",
+  fullname: "name",
+  "student full name": "name",
+  "student fullname": "name",
+  "student s name": "name",
+  "students name": "name",
+  "candidate s name": "name",
+  "candidates name": "name",
+  "name of student": "name",
+  "name of the student": "name",
+  "name of candidate": "name",
+  student: "name",
+  candidate: "name",
+  "applicant name": "name",
+  "pupil name": "name",
+  "learner name": "name",
+
+  // Email
   email: "email",
   "student email": "email",
+  "student s email": "email",
+  "student email id": "email",
   "email id": "email",
   emailid: "email",
   "email address": "email",
@@ -92,8 +204,10 @@ const SINGLE: Record<string, keyof MasterRow> = {
   "mail id": "email",
   mailid: "email",
   "official email": "email",
+  "official email id": "email",
   "college email": "email",
   "institute email": "email",
+  "university email": "email",
   "contact email": "email",
   "personal email": "email",
   webmail: "email",
@@ -101,13 +215,31 @@ const SINGLE: Record<string, keyof MasterRow> = {
 };
 
 function normalizeHeader(header: string) {
-  return header.toLowerCase().replace(/[._-]/g, " ").replace(/\s+/g, " ").trim();
+  return String(header ?? "")
+    .toLowerCase()
+    .replace(/[^a-z0-9]/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
 }
 
 function matchMasterField(rawHeader: string): keyof MasterRow | undefined {
   const norm = normalizeHeader(rawHeader);
   if (SINGLE[norm]) return SINGLE[norm];
 
+  // Serial numbers ignore
+  if (
+    norm === "s no" ||
+    norm === "sr no" ||
+    norm === "sl no" ||
+    norm === "no" ||
+    norm === "s n" ||
+    norm === "serial no" ||
+    norm === "index"
+  ) {
+    return undefined;
+  }
+
+  // Email
   if (
     norm.includes("email") ||
     norm.includes("e mail") ||
@@ -121,38 +253,130 @@ function matchMasterField(rawHeader: string): keyof MasterRow | undefined {
     return "email";
   }
 
+  // Course Code (must check before generic course)
+  if (
+    norm.includes("course code") ||
+    norm.includes("program code") ||
+    norm.includes("programme code") ||
+    norm.includes("degree code") ||
+    norm.includes("branch code") ||
+    norm === "code"
+  ) {
+    return "courseCode";
+  }
+
+  // Course Name
+  if (
+    norm.includes("course") ||
+    norm.includes("programme") ||
+    norm.includes("program") ||
+    norm.includes("degree") ||
+    norm.includes("branch") ||
+    norm.includes("department") ||
+    norm === "dept" ||
+    norm.includes("stream")
+  ) {
+    return "courseName";
+  }
+
+  // Batch
+  if (
+    norm.includes("batch") ||
+    norm.includes("academic year") ||
+    norm.includes("session") ||
+    norm.includes("cohort") ||
+    (norm.includes("year") && !norm.includes("birth"))
+  ) {
+    return "batchName";
+  }
+
+  // Registration / Enrollment / Admission
   if (
     norm.includes("registration") ||
     norm.includes("enroll") ||
+    norm.includes("enrol") ||
     norm.startsWith("reg") ||
-    norm.includes("admission no")
+    norm.includes("reg no") ||
+    norm.includes("admission") ||
+    norm.includes("scholar") ||
+    norm.includes("student id") ||
+    norm === "id"
   ) {
     return "registrationNumber";
   }
 
-  if (norm.includes("roll")) {
+  // Roll Number
+  if (
+    norm.includes("roll") ||
+    norm === "r no" ||
+    norm === "rno"
+  ) {
     return "rollNumber";
   }
 
+  // Section
   if (
-    norm.includes("name") &&
-    !norm.includes("course") &&
-    !norm.includes("batch") &&
-    !norm.includes("section") &&
-    !norm.includes("subject")
+    norm.includes("section") ||
+    norm === "sec" ||
+    norm.startsWith("sec ") ||
+    norm.endsWith(" sec") ||
+    norm.includes("division") ||
+    norm === "div" ||
+    (norm.includes("class") && !norm.includes("roll") && !norm.includes("name") && !norm.includes("year"))
   ) {
-    return "name";
+    return "section";
   }
 
-  if (norm.includes("section") || norm === "sec" || norm.includes("class")) {
-    return "section";
+  // Student Name
+  const EXCLUDED_WORDS = [
+    "course",
+    "batch",
+    "section",
+    "subject",
+    "paper",
+    "father",
+    "mother",
+    "parent",
+    "guardian",
+    "college",
+    "school",
+    "institute",
+    "university",
+    "department",
+    "dept",
+    "teacher",
+    "faculty",
+    "professor",
+    "file",
+    "room",
+    "hall",
+    "exam",
+  ];
+  const hasExcludedWord = EXCLUDED_WORDS.some((word) => norm.includes(word));
+
+  if (!hasExcludedWord) {
+    if (
+      norm.includes("name") ||
+      norm === "student" ||
+      norm === "candidate" ||
+      norm.includes("candidate") ||
+      norm.includes("student")
+    ) {
+      return "name";
+    }
   }
 
   return undefined;
 }
 
 function isSubjectHeader(header: string) {
-  return /^subjects?(\s*\d+)?$/.test(header) || /^(paper|subject code)/.test(header);
+  const norm = normalizeHeader(header);
+  return (
+    /^subjects?(\s*\d+)?$/.test(norm) ||
+    /^(paper|subject code|course subject|sub)(\s*\d+)?$/.test(norm) ||
+    norm.startsWith("subject") ||
+    norm.startsWith("paper")
+  );
 }
 
 function splitSubjects(value: string) {
@@ -194,28 +418,30 @@ export async function parseMasterWorkbook(file: File): Promise<MasterPreview> {
     const subjects: string[] = [];
     let fallbackEmail = "";
 
+    // Iterate through columns in ANY order
     for (const [header, value] of Object.entries(record)) {
-      const key = normalizeHeader(header);
       const text = String(value ?? "").trim();
       if (!text) continue;
-      if (isSubjectHeader(key)) {
+      if (isSubjectHeader(header)) {
         subjects.push(...splitSubjects(text));
         continue;
       }
       const field = matchMasterField(header);
       if (field) {
-        mapped[field] = text;
+        if (!mapped[field]) {
+          mapped[field] = text;
+        }
       } else if (!fallbackEmail && text.includes("@") && /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(text)) {
         fallbackEmail = text.toLowerCase();
       }
     }
 
     const email = (mapped["email"] || fallbackEmail || "").trim().toLowerCase();
-
     const name = (mapped["name"] ?? "").replace(/\s+/g, " ").trim();
-    const registrationNumber = normalizeRegistrationNumber(
-      mapped["registrationNumber"] ?? mapped["rollNumber"] ?? "",
-    );
+    const rawReg = (mapped["registrationNumber"] || mapped["rollNumber"] || "").trim();
+    const rawRoll = (mapped["rollNumber"] || mapped["registrationNumber"] || "").trim();
+    const registrationNumber = normalizeRegistrationNumber(rawReg);
+
     if (!name || !registrationNumber) {
       skipped.push({ rowNumber, reason: !name ? "Missing student name" : "Missing registration/roll number" });
       return;
