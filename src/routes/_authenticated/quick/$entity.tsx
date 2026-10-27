@@ -428,6 +428,16 @@ function WorkbookForm() {
           onChange={async (event) => {
             const file = event.target.files?.[0];
             if (!file) return;
+
+            const ext = file.name.split(".").pop()?.toLowerCase();
+            if (!ext || !["xlsx", "xls", "csv"].includes(ext)) {
+              toast.error(
+                `File rejected: ".${ext}" is not supported. Only Excel (.xlsx, .xls) and CSV (.csv) files are allowed. PDF and image files are strictly rejected.`,
+              );
+              event.target.value = "";
+              return;
+            }
+
             setBusy(true);
             try {
               const res = await parseMasterWorkbook(file);

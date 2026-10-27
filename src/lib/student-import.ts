@@ -114,6 +114,13 @@ export function normalizeSectionName(value: string) {
 }
 
 export async function parseStudentWorkbook(file: File): Promise<ExcelStudentRow[]> {
+  const ext = file.name.split(".").pop()?.toLowerCase();
+  if (!ext || !["xlsx", "xls", "csv"].includes(ext)) {
+    throw new Error(
+      `File rejected: Unsupported format (.${ext || "unknown"}). Only Excel (.xlsx, .xls) and CSV (.csv) files are allowed. PDF, PNG, images and documents are strictly rejected.`,
+    );
+  }
+
   const buffer = await file.arrayBuffer();
   const workbook = XLSX.read(buffer, { type: "array" });
   const sheetName = workbook.SheetNames[0];

@@ -174,7 +174,20 @@ function ImportPage() {
                 type="file"
                 accept=".xlsx,.xls,.csv"
                 onChange={(event) => {
-                  setFile(event.target.files?.[0] ?? null);
+                  const selected = event.target.files?.[0] ?? null;
+                  if (selected) {
+                    const ext = selected.name.split(".").pop()?.toLowerCase();
+                    if (!ext || !["xlsx", "xls", "csv"].includes(ext)) {
+                      toast.error(
+                        `File rejected: ".${ext}" is not supported. Only Excel (.xlsx, .xls) and CSV (.csv) files are allowed. PDF and image files are strictly rejected.`,
+                      );
+                      event.target.value = "";
+                      setFile(null);
+                      setPreview(null);
+                      return;
+                    }
+                  }
+                  setFile(selected);
                   setPreview(null);
                 }}
               />
@@ -231,20 +244,47 @@ function ImportPage() {
                     New sections that will be created: {preview.newSections.join(", ")}
                   </p>
                 ) : null}
-                {preview.duplicateRows.length ? (
-                  <p className="flex items-start gap-2 text-muted-foreground">
-                    <AlertTriangle className="mt-0.5 size-4 text-amber-600" />
-                    {preview.duplicateRows.length} duplicate registration numbers in the file will be
-                    skipped.
-                  </p>
-                ) : null}
-                {preview.invalidRows.length ? (
-                  <p className="flex items-start gap-2 text-destructive">
-                    <AlertTriangle className="mt-0.5 size-4" />
-                    {preview.invalidRows.length} invalid rows (missing registration number, name, or email)
-                    will be skipped.
-                  </p>
-                ) : null}
+                {preview.duplicateRows.length > 0 && (
+                  <div className="rounded-xl border border-amber-500/25 bg-amber-500/5 p-3.5 space-y-2">
+                    <p className="text-xs font-bold text-amber-800 dark:text-amber-400 flex items-center gap-2">
+                      <AlertTriangle className="size-4 text-amber-600 shrink-0" />
+                      <span>{preview.duplicateRows.length} Duplicate Records Rejected (Skipped)</span>
+                    </p>
+                    <div className="max-h-28 overflow-y-auto divide-y divide-amber-500/10 text-xs rounded-lg border border-amber-500/15 bg-card/60">
+                      {preview.duplicateRows.map((dup, idx) => (
+                        <div key={idx} className="px-3 py-1.5 flex items-center justify-between gap-2">
+                          <span className="font-mono font-bold text-amber-700 dark:text-amber-300">
+                            Row {dup.rowNumber}
+                          </span>
+                          <span className="text-muted-foreground text-[11px]">
+                            Registration No: <strong className="text-foreground">{dup.registrationNumber}</strong> (Duplicate in file)
+                          </span>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+
+                {preview.invalidRows.length > 0 && (
+                  <div className="rounded-xl border border-rose-500/25 bg-rose-500/5 p-3.5 space-y-2">
+                    <p className="text-xs font-bold text-rose-800 dark:text-rose-400 flex items-center gap-2">
+                      <AlertTriangle className="size-4 text-rose-600 shrink-0" />
+                      <span>{preview.invalidRows.length} Invalid Rows Rejected (Missing Required Fields)</span>
+                    </p>
+                    <div className="max-h-32 overflow-y-auto divide-y divide-rose-500/10 text-xs rounded-lg border border-rose-500/15 bg-card/60">
+                      {preview.invalidRows.map((inv, idx) => (
+                        <div key={idx} className="px-3 py-1.5 flex items-center justify-between gap-2">
+                          <span className="font-mono font-bold text-rose-700 dark:text-rose-300">
+                            Row {inv.rowNumber}
+                          </span>
+                          <span className="font-medium text-rose-600 dark:text-rose-400 text-[11px]">
+                            {inv.reason}
+                          </span>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
               </div>
 
               {actionable.length === 0 ? (
