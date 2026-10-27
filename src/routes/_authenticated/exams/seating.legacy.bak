@@ -1,0 +1,823 @@
+import { Link, createFileRoute, useParams } from "@tanstack/react-router";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useEffect, useMemo, useState } from "react";
+import {
+  AlertTriangle,
+  Download,
+  FileSpreadsheet,
+  Loader2,
+  Plus,
+  Printer,
+  Shuffle,
+  Trash2,
+  Wand2,
+} from "lucide-react";
+import { toast } from "sonner";
+
+import { AdminLayout } from "@/components/layout/AdminLayout";
+import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
+import { Checkbox } from "@/components/ui/checkbox";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
+import { Skeleton } from "@/components/ui/skeleton";
+import { listBatches, listCourses } from "@/lib/db";
+import {
+  addExamGroup,
+  countExamStudents,
+  createRoom,
+  getExam,
+  getSeatingPlan,
+  listExamGroups,
+  listRooms,
+  previewSeating,
+  removeExamGroup,
+  saveSeatingPlan,
+} from "@/lib/seating";
+import { SuggestInput } from "@/components/shared/SuggestInput";
+import { exportSeatingPerCourse, exportSeatingWorkbook } from "@/lib/seating-export";
+import { GridBackdrop } from "@/components/effects/GridBackdrop";
+import type { SeatingResult, Strategy } from "@/lib/seating-algorithm";
+
+export const Route = createFileRoute("/_authenticated/exams/seating/legacy")({
+  head: () => ({
+    meta: [
+      { title: "Seating arrangement | XYZ University Exam Branch" },
+      {
+        name: "description",
+        content:
+          "Generate balanced, mixed hall-wise seating arrangements: pick the batches sitting the exam, choose halls and publish the seat chart.",
+      },
+      { property: "og:title", content: "Seating arrangement | XYZ University Exam Branch" },
+      {
+        property: "og:description",
+        content: "Balanced room allocation with anti-malpractice course mixing.",
+      },
+    ],
+  }),
+  component: SeatingPage,
+});
+
+const GROUP_TONES = [
+  "bg-primary/10 text-primary",
+  "bg-emerald-500/10 text-emerald-700 dark:text-emerald-400",
+  "bg-amber-500/15 text-amber-700 dark:text-amber-400",
+  "bg-sky-500/10 text-sky-700 dark:text-sky-400",
+  "bg-fuchsia-500/10 text-fuchsia-700 dark:text-fuchsia-400",
+  "bg-rose-500/10 text-rose-700 dark:text-rose-400",
+];
+
+function SeatingPage() {
+  const { examId } = useParams({ from: "/_authenticated/exams/$examId/seating" });
+  const queryClient = useQueryClient();
+
+  const [selectedRooms, setSelectedRooms] = useState<string[]>([]);
+  const [strategy, setStrategy] = useState<Strategy>("column_wise");
+  const [courseId, setCourseId] = useState("");
+  const [batchId, setBatchId] = useState("");
+  const [preview, setPreview] = useState<SeatingResult | null>(null);
+  const [shortfallOpen, setShortfallOpen] = useState(false);
+  const [quickRoom, setQuickRoom] = useState({
+    block: "Main",
+    room_number: "",
+    row_count: 6,
+    seats_per_row: 6,
+  });
+
+  const exam = useQuery({ queryKey: ["exam", examId], queryFn: () => getExam(examId) });
+  const groups = useQuery({
+    queryKey: ["exam-groups", examId],
+    queryFn: () => listExamGroups(examId),
+  });
+  const rooms = useQuery({ queryKey: ["rooms"], queryFn: listRooms });
+  const courses = useQuery({ queryKey: ["courses"], queryFn: listCourses });
+  const batches = useQuery({
+    queryKey: ["batches", courseId],
+    queryFn: () => listBatches(courseId || undefined),
+  });
+  const saved = useQuery({
+    queryKey: ["seating-plan", examId],
+    queryFn: () => getSeatingPlan(examId),
+  });
+  const examStudents = useQuery({
+    queryKey: ["exam-students", examId],
+    queryFn: () => countExamStudents(examId),
+  });
+  const requiredSeats = examStudents.data?.total ?? 0;
+  const canAlternate = (examStudents.data?.perGroup ?? []).length >= 2;
+
+  useEffect(() => {
+    if (!canAlternate && strategy === "alternate") setStrategy("column_wise");
+  }, [canAlternate, strategy]);
+
+  const activeRooms = useMemo(
+    () => (rooms.data ?? []).filter((room) => room.is_active),
+    [rooms.data],
+  );
+  const selectedCapacity = activeRooms
+    .filter((room) => selectedRooms.includes(room.id))
+    .reduce((sum, room) => sum + room.row_count * room.seats_per_row, 0);
+
+  /** Picks halls at random but only as many as the cohort actually needs. */
+  function autoPickHalls() {
+    if (activeRooms.length === 0) return;
+    const shuffled = [...activeRooms].sort(() => Math.random() - 0.5);
+    const picked: string[] = [];
+    let capacity = 0;
+    for (const room of shuffled) {
+      picked.push(room.id);
+      capacity += room.row_count * room.seats_per_row;
+      if (requiredSeats > 0 && capacity >= requiredSeats) break;
+    }
+    setSelectedRooms(picked);
+    toast.success(`${picked.length} halls picked · ${capacity} seats`);
+  }
+
+  const addGroup = useMutation({
+    mutationFn: () => addExamGroup({ exam_id: examId, course_id: courseId, batch_id: batchId }),
+    onSuccess: () => {
+      setBatchId("");
+      void queryClient.invalidateQueries({ queryKey: ["exam-groups", examId] });
+      void queryClient.invalidateQueries({ queryKey: ["exam-students", examId] });
+    },
+    onError: () => toast.error("That course and batch is already added to this exam."),
+  });
+
+  const dropGroup = useMutation({
+    mutationFn: removeExamGroup,
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: ["exam-groups", examId] });
+      void queryClient.invalidateQueries({ queryKey: ["exam-students", examId] });
+    },
+  });
+
+  const quickAddRoom = useMutation({
+    mutationFn: () =>
+      createRoom({
+        block: quickRoom.block.trim() || "Main",
+        room_number: quickRoom.room_number.trim(),
+        row_count: quickRoom.row_count,
+        seats_per_row: quickRoom.seats_per_row,
+        is_active: true,
+      }),
+    onSuccess: (room) => {
+      toast.success(`Hall ${room.block}/${room.room_number} added`);
+      setQuickRoom((current) => ({ ...current, room_number: "" }));
+      setSelectedRooms((current) => [...current, room.id]);
+      void queryClient.invalidateQueries({ queryKey: ["rooms"] });
+    },
+    onError: (error) =>
+      toast.error(error instanceof Error ? error.message : "Could not add hall"),
+  });
+
+  function handleGenerate() {
+    if (requiredSeats > 0 && selectedCapacity < requiredSeats) {
+      setShortfallOpen(true);
+      return;
+    }
+    generate.mutate();
+  }
+
+  const generate = useMutation({
+    mutationFn: () => previewSeating(examId, selectedRooms, strategy),
+    onSuccess: (result) => {
+      setPreview(result);
+      if (result.seated === 0) toast.error("No active students found for the selected batches.");
+      else
+        toast.success(
+          `Seated ${result.seated} students across ${result.rooms.length} halls` +
+            (result.unseated.length > 0 ? ` — ${result.unseated.length} left unseated` : ""),
+        );
+    },
+    onError: (error) => toast.error(error instanceof Error ? error.message : "Generation failed"),
+  });
+
+  const publish = useMutation({
+    mutationFn: () => {
+      if (!preview) throw new Error("Generate a plan first");
+      return saveSeatingPlan(examId, preview, strategy);
+    },
+    onSuccess: () => {
+      toast.success("Seating plan published");
+      setPreview(null);
+      void queryClient.invalidateQueries({ queryKey: ["seating-plan", examId] });
+    },
+    onError: (error) => toast.error(error instanceof Error ? error.message : "Could not publish"),
+  });
+
+  const roomsById = useMemo(
+    () => new Map((rooms.data ?? []).map((room) => [room.id, room])),
+    [rooms.data],
+  );
+
+  const publishedRooms = useMemo(() => {
+    const seats = saved.data?.seats ?? [];
+    const map = new Map<string, typeof seats>();
+    for (const seat of seats) {
+      const list = map.get(seat.room_id) ?? [];
+      list.push(seat);
+      map.set(seat.room_id, list);
+    }
+    return [...map.entries()];
+  }, [saved.data]);
+
+  const labelTone = useMemo(() => {
+    const labels = new Set<string>();
+    for (const room of preview?.rooms ?? []) for (const seat of room.seats) labels.add(seat.group_label);
+    for (const [, seats] of publishedRooms) for (const seat of seats) labels.add(seat.group_label);
+    const map = new Map<string, string>();
+    [...labels].forEach((label, index) => {
+      map.set(label, GROUP_TONES[index % GROUP_TONES.length] ?? GROUP_TONES[0]!);
+    });
+    return map;
+  }, [preview, publishedRooms]);
+
+  /** Seats consumed per hall in the current draft or published plan — drives green/red cards. */
+  const usedByRoom = useMemo(() => {
+    const map = new Map<string, number>();
+    for (const room of preview?.rooms ?? []) map.set(room.room.id, room.used);
+    if (!preview) {
+      for (const [roomId, seats] of publishedRooms) map.set(roomId, seats.length);
+    }
+    return map;
+  }, [preview, publishedRooms]);
+
+  function exportCsv() {
+    const seats = saved.data?.seats ?? [];
+    if (seats.length === 0) return;
+    const header = "Block,Room,Row,Seat,Registration No,Roll No,Student,Group";
+    const lines = seats.map((seat) => {
+      const room = roomsById.get(seat.room_id);
+      return [
+        room?.block ?? "",
+        room?.room_number ?? "",
+        seat.row_number,
+        seat.seat_number,
+        seat.students?.registration_number ?? "",
+        seat.students?.roll_number ?? "",
+        seat.students?.name ?? "",
+        seat.group_label,
+      ]
+        .map((cell) => `"${String(cell).replace(/"/g, '""')}"`)
+        .join(",");
+    });
+    const blob = new Blob([[header, ...lines].join("\n")], { type: "text/csv;charset=utf-8" });
+    const url = URL.createObjectURL(blob);
+    const anchor = document.createElement("a");
+    anchor.href = url;
+    anchor.download = `seating-${exam.data?.exam_date ?? "plan"}.csv`;
+    anchor.click();
+    URL.revokeObjectURL(url);
+  }
+
+  return (
+    <AdminLayout
+      title="Seating arrangement"
+      description={
+        exam.data ? `${exam.data.name} · ${exam.data.exam_date} · ${exam.data.session}` : "Loading…"
+      }
+    >
+      <div className="grid gap-4 lg:grid-cols-3">
+        <section className="panel p-4 lg:col-span-1">
+          <h2 className="text-sm font-semibold">1. Batches sitting this exam</h2>
+          <p className="mt-1 text-xs text-muted-foreground">
+            Add every course + batch appearing in this sitting. Mixing works across these groups.
+          </p>
+
+          <div className="mt-3 space-y-2">
+            <Select
+              value={courseId}
+              onValueChange={(value) => {
+                setCourseId(value);
+                setBatchId("");
+              }}
+            >
+              <SelectTrigger>
+                <SelectValue placeholder="Select course" />
+              </SelectTrigger>
+              <SelectContent>
+                {(courses.data ?? []).map((course) => (
+                  <SelectItem key={course.id} value={course.id}>
+                    {course.code} — {course.name}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+
+            <Select value={batchId} onValueChange={setBatchId} disabled={!courseId}>
+              <SelectTrigger>
+                <SelectValue placeholder="Select batch" />
+              </SelectTrigger>
+              <SelectContent>
+                {(batches.data ?? []).map((batch) => (
+                  <SelectItem key={batch.id} value={batch.id}>
+                    {batch.name}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+
+            <Button
+              className="w-full"
+              variant="outline"
+              disabled={!courseId || !batchId || addGroup.isPending}
+              onClick={() => addGroup.mutate()}
+            >
+              <Plus className="size-4" /> Add group
+            </Button>
+          </div>
+
+          <ul className="mt-4 space-y-2">
+            {(groups.data ?? []).map((group) => (
+              <li
+                key={group.id}
+                className="flex items-center gap-2 rounded-md border border-border px-3 py-2 text-sm"
+              >
+                <span className="truncate">
+                  {group.courses?.code} · {group.batches?.name}
+                </span>
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  className="ml-auto"
+                  onClick={() => dropGroup.mutate(group.id)}
+                >
+                  <Trash2 className="size-4 text-destructive" />
+                </Button>
+              </li>
+            ))}
+            {(groups.data ?? []).length === 0 ? (
+              <li className="text-xs text-muted-foreground">No groups added yet.</li>
+            ) : null}
+          </ul>
+        </section>
+
+        <section className="panel p-4 lg:col-span-2">
+          <div className="flex flex-wrap items-center gap-2">
+            <h2 className="text-sm font-semibold">2. Halls and strategy</h2>
+            <div className="ml-auto flex items-center gap-2">
+              <Label className="text-xs text-muted-foreground">Strategy</Label>
+              <Select value={strategy} onValueChange={(value) => setStrategy(value as Strategy)}>
+                <SelectTrigger className="w-[180px]">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="column_wise">Normal</SelectItem>
+                  <SelectItem value="alternate" disabled={!canAlternate}>
+                    Alternate
+                  </SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+          </div>
+
+          {rooms.isLoading ? (
+            <Skeleton className="mt-4 h-24 w-full" />
+          ) : activeRooms.length === 0 ? (
+            <p className="mt-4 text-sm text-muted-foreground">
+              No active halls. Add halls under Exam halls first.
+            </p>
+          ) : (
+            <>
+              <div className="mt-3 flex flex-wrap gap-2">
+                <Button size="sm" variant="secondary" onClick={autoPickHalls}>
+                  <Shuffle className="size-4" /> Auto-pick halls
+                </Button>
+                <Button
+                  size="sm"
+                  variant="outline"
+                  onClick={() => setSelectedRooms(activeRooms.map((room) => room.id))}
+                >
+                  Select all
+                </Button>
+                <Button size="sm" variant="outline" onClick={() => setSelectedRooms([])}>
+                  Clear
+                </Button>
+                <span className="ml-auto self-center text-xs text-muted-foreground">
+                  {selectedRooms.length} halls · {selectedCapacity} seats selected
+                  {requiredSeats > 0 ? ` · ${requiredSeats} students to seat` : ""}
+                </span>
+              </div>
+
+              {requiredSeats > 0 && selectedRooms.length > 0 && selectedCapacity < requiredSeats ? (
+                <p className="mt-3 flex items-center gap-2 rounded-md border border-destructive/40 bg-destructive/5 px-3 py-2 text-xs text-destructive">
+                  <AlertTriangle className="size-4 shrink-0" />
+                  {requiredSeats - selectedCapacity} seats short — select more halls or add a new
+                  hall before generating.
+                </p>
+              ) : null}
+
+              <div className="mt-3 grid gap-2 sm:grid-cols-2 xl:grid-cols-3">
+                {activeRooms.map((room) => {
+                  const capacity = room.row_count * room.seats_per_row;
+                  const used = usedByRoom.get(room.id) ?? 0;
+                  const full = used >= capacity && capacity > 0;
+                  return (
+                    <label
+                      key={room.id}
+                      className={`glow-card relative flex items-center gap-2 overflow-hidden rounded-lg border px-3 py-2 text-sm ${
+                        full
+                          ? "border-destructive/50 bg-destructive/5"
+                          : "border-emerald-500/50 bg-emerald-500/5"
+                      }`}
+                    >
+                      <Checkbox
+                        checked={selectedRooms.includes(room.id)}
+                        onCheckedChange={(checked) =>
+                          setSelectedRooms((current) =>
+                            checked
+                              ? [...current, room.id]
+                              : current.filter((value) => value !== room.id),
+                          )
+                        }
+                      />
+                      <span className="truncate font-medium">
+                        {room.block} / {room.room_number}
+                      </span>
+                      <span className="ml-auto text-xs text-muted-foreground">
+                        {room.row_count}×{room.seats_per_row}
+                      </span>
+                      <span
+                        className={`rounded px-1.5 py-0.5 text-[10px] font-semibold uppercase ${
+                          full
+                            ? "bg-destructive/15 text-destructive"
+                            : "bg-emerald-500/15 text-emerald-700 dark:text-emerald-400"
+                        }`}
+                      >
+                        {full ? "Full" : `${capacity - used} free`}
+                      </span>
+                    </label>
+                  );
+                })}
+              </div>
+            </>
+          )}
+
+          <div className="mt-4 flex flex-wrap gap-2">
+            <Button
+              disabled={
+                selectedRooms.length === 0 ||
+                (groups.data ?? []).length === 0 ||
+                generate.isPending
+              }
+              onClick={handleGenerate}
+            >
+              {generate.isPending ? (
+                <Loader2 className="size-4 animate-spin" />
+              ) : (
+                <Wand2 className="size-4" />
+              )}
+              Generate arrangement
+            </Button>
+            {preview ? (
+              <Button variant="secondary" onClick={() => publish.mutate()} disabled={publish.isPending}>
+                {publish.isPending ? <Loader2 className="size-4 animate-spin" /> : null}
+                Publish plan
+              </Button>
+            ) : null}
+          </div>
+
+          {preview ? (
+            <div className="mt-4 grid gap-3 sm:grid-cols-4">
+              {[
+                { label: "Seated", value: preview.seated },
+                { label: "Halls used", value: preview.rooms.length },
+                { label: "Unseated", value: preview.unseated.length },
+                { label: "Adjacency clashes", value: preview.adjacentConflicts },
+              ].map((stat) => (
+                <div key={stat.label} className="rounded-md border border-border p-3">
+                  <p className="text-xs uppercase tracking-wide text-muted-foreground">
+                    {stat.label}
+                  </p>
+                  <p className="mt-0.5 text-xl font-semibold">{stat.value}</p>
+                </div>
+              ))}
+            </div>
+          ) : null}
+        </section>
+      </div>
+
+      {preview ? (
+        <div className="mt-4 space-y-4">
+          <h2 className="text-sm font-semibold">Draft seat charts (not yet published)</h2>
+          {preview.rooms.map((room) => (
+            <SeatGrid
+              key={room.room.id}
+              title={`${room.room.block} / ${room.room.room_number}`}
+              subtitle={`${room.used} of ${room.room.row_count * room.room.seats_per_row} seats`}
+              rowCount={room.room.row_count}
+              seatsPerRow={room.room.seats_per_row}
+              seats={room.seats.map((seat) => ({
+                row_number: seat.row_number,
+                seat_number: seat.seat_number,
+                group_label: seat.group_label,
+                primary: seat.student_id.slice(0, 8),
+                secondary: "",
+              }))}
+              tones={labelTone}
+            />
+          ))}
+        </div>
+      ) : null}
+
+      <div className="mt-6">
+        <div className="flex flex-wrap items-center gap-2">
+          <h2 className="text-sm font-semibold">Published seating plan</h2>
+          {saved.data ? (
+            <>
+              <Badge variant="secondary">
+                {saved.data.plan.total_students} students · {saved.data.plan.rooms_used} halls
+              </Badge>
+              <div className="ml-auto flex gap-2">
+                <Button size="sm" variant="outline" onClick={exportCsv}>
+                  <Download className="size-4" /> CSV
+                </Button>
+                <Button
+                  size="sm"
+                  variant="outline"
+                  onClick={() =>
+                    exportSeatingWorkbook(
+                      saved.data?.seats ?? [],
+                      roomsById,
+                      exam.data?.exam_date ?? "plan",
+                    )
+                  }
+                >
+                  <FileSpreadsheet className="size-4" /> Excel (sheet per course)
+                </Button>
+                <Button
+                  size="sm"
+                  variant="outline"
+                  onClick={() =>
+                    exportSeatingPerCourse(
+                      saved.data?.seats ?? [],
+                      roomsById,
+                      exam.data?.exam_date ?? "plan",
+                    )
+                  }
+                >
+                  <FileSpreadsheet className="size-4" /> Excel per batch
+                </Button>
+                <Button size="sm" variant="outline" onClick={() => window.print()}>
+                  <Printer className="size-4" /> Print
+                </Button>
+              </div>
+            </>
+          ) : null}
+        </div>
+
+        {saved.isLoading ? (
+          <Skeleton className="mt-3 h-32 w-full" />
+        ) : !saved.data ? (
+          <p className="mt-2 text-sm text-muted-foreground">
+            Nothing published yet. Generate an arrangement and publish it.
+          </p>
+        ) : (
+          <div className="mt-3 space-y-4">
+            {publishedRooms.map(([roomId, seats]) => {
+              const room = roomsById.get(roomId);
+              return (
+                <SeatGrid
+                  key={roomId}
+                  title={room ? `${room.block} / ${room.room_number}` : "Hall"}
+                  subtitle={`${seats.length} students`}
+                  rowCount={room?.row_count ?? 0}
+                  seatsPerRow={room?.seats_per_row ?? 0}
+                  seats={seats.map((seat) => ({
+                    row_number: seat.row_number,
+                    seat_number: seat.seat_number,
+                    group_label: seat.group_label,
+                    primary: seat.students?.registration_number ?? "—",
+                    secondary: seat.students?.name ?? "",
+                  }))}
+                  tones={labelTone}
+                />
+              );
+            })}
+          </div>
+        )}
+      </div>
+
+      <Dialog open={shortfallOpen} onOpenChange={setShortfallOpen}>
+        <DialogContent className="sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2 text-destructive">
+              <AlertTriangle className="size-5" /> Not enough seats
+            </DialogTitle>
+            <DialogDescription>
+              {requiredSeats} students are appearing but the selected halls only provide{" "}
+              {selectedCapacity} seats. Add {requiredSeats - selectedCapacity} more seats (or select
+              more halls) — no seating plan is generated until every student fits.
+            </DialogDescription>
+          </DialogHeader>
+
+          <ul className="space-y-1 rounded-md border border-border p-3 text-sm">
+            {(examStudents.data?.perGroup ?? []).map((entry) => (
+              <li key={entry.label} className="flex gap-2">
+                <span className="truncate">{entry.label}</span>
+                <span className="ml-auto font-medium tabular-nums">{entry.count}</span>
+              </li>
+            ))}
+          </ul>
+
+          <div className="space-y-2 rounded-md border border-border p-3">
+            <p className="text-sm font-medium">Quick add a hall</p>
+            <div className="grid grid-cols-2 gap-2">
+              <div className="space-y-1">
+                <Label className="text-xs">Block</Label>
+                <SuggestInput
+                  value={quickRoom.block}
+                  onChange={(value) => setQuickRoom({ ...quickRoom, block: value })}
+                  maxLength={40}
+                  suggestions={[...new Set((rooms.data ?? []).map((room) => room.block))].map(
+                    (block) => ({ value: block }),
+                  )}
+                />
+              </div>
+              <div className="space-y-1">
+                <Label className="text-xs">Room number</Label>
+                <Input
+                  value={quickRoom.room_number}
+                  maxLength={20}
+                  placeholder="204"
+                  onChange={(event) =>
+                    setQuickRoom({ ...quickRoom, room_number: event.target.value })
+                  }
+                />
+              </div>
+              <div className="space-y-1">
+                <Label className="text-xs">Rows</Label>
+                <Input
+                  type="number"
+                  min={1}
+                  max={30}
+                  value={quickRoom.row_count}
+                  onChange={(event) =>
+                    setQuickRoom({ ...quickRoom, row_count: Number(event.target.value) || 0 })
+                  }
+                />
+              </div>
+              <div className="space-y-1">
+                <Label className="text-xs">Seats per row</Label>
+                <Input
+                  type="number"
+                  min={1}
+                  max={30}
+                  value={quickRoom.seats_per_row}
+                  onChange={(event) =>
+                    setQuickRoom({ ...quickRoom, seats_per_row: Number(event.target.value) || 0 })
+                  }
+                />
+              </div>
+            </div>
+            <p className="text-xs text-muted-foreground">
+              Capacity {quickRoom.row_count * quickRoom.seats_per_row} seats — added halls are
+              selected automatically.
+            </p>
+            <Button
+              className="w-full"
+              disabled={
+                !quickRoom.room_number.trim() ||
+                quickRoom.row_count < 1 ||
+                quickRoom.seats_per_row < 1 ||
+                quickAddRoom.isPending
+              }
+              onClick={() => quickAddRoom.mutate()}
+            >
+              {quickAddRoom.isPending ? (
+                <Loader2 className="size-4 animate-spin" />
+              ) : (
+                <Plus className="size-4" />
+              )}
+              Add hall
+            </Button>
+          </div>
+
+          <DialogFooter>
+            <Button asChild variant="outline">
+              <Link to="/rooms">Manage all halls</Link>
+            </Button>
+            <Button variant="secondary" onClick={() => setShortfallOpen(false)}>
+              Close
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+    </AdminLayout>
+  );
+}
+
+type GridSeat = {
+  row_number: number;
+  seat_number: number;
+  group_label: string;
+  primary: string;
+  secondary: string;
+};
+
+function SeatGrid({
+  title,
+  subtitle,
+  rowCount,
+  seatsPerRow,
+  seats,
+  tones,
+}: {
+  title: string;
+  subtitle: string;
+  rowCount: number;
+  seatsPerRow: number;
+  seats: GridSeat[];
+  tones: Map<string, string>;
+}) {
+  const lookup = new Map(seats.map((seat) => [`${seat.row_number}-${seat.seat_number}`, seat]));
+  const labels = [...new Set(seats.map((seat) => seat.group_label))];
+  const capacity = rowCount * seatsPerRow;
+  const vacant = capacity - seats.length;
+
+  return (
+    <div className="panel relative overflow-hidden p-4">
+      <GridBackdrop soft />
+      <div className="flex flex-wrap items-center gap-2">
+        <p className="text-sm font-semibold">{title}</p>
+        <span className="text-xs text-muted-foreground">{subtitle}</span>
+        <span
+          className={`rounded px-1.5 py-0.5 text-[10px] font-semibold uppercase ${
+            vacant > 0
+              ? "bg-emerald-500/15 text-emerald-700 dark:text-emerald-400"
+              : "bg-destructive/15 text-destructive"
+          }`}
+        >
+          {vacant > 0 ? `${vacant} vacant` : "Full"}
+        </span>
+        <div className="ml-auto flex flex-wrap gap-1">
+          {labels.map((label) => (
+            <span
+              key={label}
+              className={`rounded px-2 py-0.5 text-[11px] font-medium ${tones.get(label) ?? ""}`}
+            >
+              {label}
+            </span>
+          ))}
+        </div>
+      </div>
+
+      <div className="mt-3 overflow-x-auto">
+        <div className="inline-block min-w-full space-y-1.5">
+          <div className="mb-3 flex flex-col items-center">
+            <div className="w-full max-w-3xl rounded-b-[2rem] border-b-4 border-primary bg-gradient-to-b from-primary/15 to-transparent px-4 py-2 text-center text-[11px] font-semibold uppercase tracking-[0.3em] text-primary">
+              White board / screen
+            </div>
+            <span className="mt-1 text-[10px] text-muted-foreground">
+              Students face this side · Row 1 is closest to the board
+            </span>
+          </div>
+          {Array.from({ length: rowCount }, (_, rowIndex) => (
+            <div key={rowIndex} className="flex items-stretch gap-1.5">
+              <span className="w-12 shrink-0 self-center text-[11px] text-muted-foreground">
+                Row {rowIndex + 1}
+              </span>
+              {Array.from({ length: seatsPerRow }, (_, colIndex) => {
+                const seat = lookup.get(`${rowIndex + 1}-${colIndex + 1}`);
+                return (
+                  <div
+                    key={colIndex}
+                    className={`min-w-[104px] flex-1 rounded-md border border-border px-2 py-1.5 text-[11px] leading-tight ${
+                      seat
+                        ? (tones.get(seat.group_label) ?? "")
+                        : "border-emerald-500/40 bg-emerald-500/10 text-emerald-700 dark:text-emerald-400"
+                    }`}
+                  >
+                    {seat ? (
+                      <>
+                        <p className="font-semibold">{seat.primary}</p>
+                        <p className="truncate opacity-80">{seat.secondary || seat.group_label}</p>
+                      </>
+                    ) : (
+                      <p>Seat {colIndex + 1} · vacant</p>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+          ))}
+        </div>
+      </div>
+    </div>
+  );
+}
