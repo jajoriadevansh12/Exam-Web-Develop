@@ -112,6 +112,32 @@ export async function updateRoom(id: string, input: RoomInput) {
 }
 
 export async function deleteRoom(id: string) {
+  // TC24: Block deletion if room has active seating allocations
+  const { count: allocCount, error: allocErr } = await supabase
+    .from("seat_allocations")
+    .select("id", { count: "exact", head: true })
+    .eq("room_id", id);
+
+  if (allocErr) throw new Error(allocErr.message);
+  if (allocCount && allocCount > 0) {
+    throw new Error(
+      `Cannot delete room: This exam hall has ${allocCount} active seating allocation(s) scheduled. Deletion is blocked to preserve active exam seating plans.`,
+    );
+  }
+
+  // Check if room has invigilation duties assigned
+  const { count: dutyCount, error: dutyErr } = await supabase
+    .from("professor_duties")
+    .select("id", { count: "exact", head: true })
+    .eq("room_id", id);
+
+  if (dutyErr) throw new Error(dutyErr.message);
+  if (dutyCount && dutyCount > 0) {
+    throw new Error(
+      `Cannot delete room: This exam hall has ${dutyCount} professor duty assignment(s). Deletion is blocked with dependency warning.`,
+    );
+  }
+
   const result = await supabase.from("rooms").delete().eq("id", id);
   if (result.error) throw new Error(result.error.message);
   await logActivity({ entity_type: "room", entity_id: id, action: "deleted" });

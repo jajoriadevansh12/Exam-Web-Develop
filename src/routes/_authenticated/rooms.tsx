@@ -19,6 +19,16 @@ import { Label } from "@/components/ui/label";
 import { Switch } from "@/components/ui/switch";
 import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
 import { SuggestInput } from "@/components/shared/SuggestInput";
 import { RoomImportDialog } from "@/components/rooms/RoomImportDialog";
 import { createRoom, deleteRoom, listRooms, updateRoom, type Room } from "@/lib/seating";
@@ -56,6 +66,7 @@ function RoomsPage() {
   const queryClient = useQueryClient();
   const [open, setOpen] = useState(false);
   const [editing, setEditing] = useState<Room | null>(null);
+  const [deletingRoom, setDeletingRoom] = useState<Room | null>(null);
   const [form, setForm] = useState(EMPTY);
 
   const { data, isLoading } = useQuery({ queryKey: ["rooms"], queryFn: listRooms });
@@ -96,9 +107,18 @@ function RoomsPage() {
     mutationFn: deleteRoom,
     onSuccess: () => {
       toast.success("Room deleted");
+      setDeletingRoom(null);
       void queryClient.invalidateQueries({ queryKey: ["rooms"] });
     },
-    onError: () => toast.error("Cannot delete this room while seating plans reference it."),
+    onError: (error) => {
+      setDeletingRoom(null);
+      toast.error(
+        error instanceof Error
+          ? error.message
+          : "Cannot delete this room while seating plans reference it.",
+        { duration: 6000 },
+      );
+    },
   });
 
   return (
@@ -190,8 +210,9 @@ function RoomsPage() {
                       <Button
                         variant="ghost"
                         size="icon"
-                        onClick={() => remove.mutate(room.id)}
+                        onClick={() => setDeletingRoom(room)}
                         disabled={remove.isPending}
+                        title="Delete hall"
                       >
                         <Trash2 className="size-4 text-destructive" />
                       </Button>
@@ -282,6 +303,53 @@ function RoomsPage() {
           </DialogFooter>
         </DialogContent>
       </Dialog>
+
+      <AlertDialog
+        open={Boolean(deletingRoom)}
+        onOpenChange={(isOpen) => {
+          if (!isOpen && !remove.isPending) setDeletingRoom(null);
+        }}
+      >
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Delete Exam Hall?</AlertDialogTitle>
+            <AlertDialogDescription>
+              Are you sure you want to delete room{" "}
+              <strong className="text-foreground">
+                {deletingRoom?.block} - {deletingRoom?.room_number}
+              </strong>
+              ? This action is permanent.
+              <br />
+              <span className="mt-2 block text-xs text-amber-600 dark:text-amber-400">
+                ⚠️ Note: If this hall has active exams, seating allocations, or assigned duties,
+                deletion will be strictly blocked to protect student seating.
+              </span>
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel disabled={remove.isPending}>Cancel</AlertDialogCancel>
+            <AlertDialogAction
+              className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+              disabled={remove.isPending}
+              onClick={(e) => {
+                e.preventDefault();
+                if (deletingRoom) {
+                  remove.mutate(deletingRoom.id);
+                }
+              }}
+            >
+              {remove.isPending ? (
+                <>
+                  <Loader2 className="size-4 animate-spin mr-1.5" />
+                  Checking & deleting...
+                </>
+              ) : (
+                "Delete Hall"
+              )}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </AdminLayout>
   );
 }
