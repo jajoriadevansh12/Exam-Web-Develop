@@ -4,6 +4,7 @@ import { useMemo, useState } from "react";
 import {
   AlertTriangle,
   Armchair,
+  BookOpen,
   Calendar,
   CheckCircle2,
   Clock,
@@ -42,6 +43,7 @@ import {
 } from "@/components/ui/select";
 import { Skeleton } from "@/components/ui/skeleton";
 import { listBatches, listCourses } from "@/lib/db";
+import { listSubjects } from "@/lib/subjects";
 import {
   deleteExam,
   getBatchStudentCounts,
@@ -110,6 +112,8 @@ function ExamsPage() {
   const [searchQuery, setSearchQuery] = useState("");
   const [courseFilterInDialog, setCourseFilterInDialog] = useState<string>("all");
 
+  const [showMultipleBatches, setShowMultipleBatches] = useState(false);
+
   const { data: exams = [], isLoading: examsLoading } = useQuery({
     queryKey: ["exams_detailed"],
     queryFn: listExamsDetailed,
@@ -129,6 +133,56 @@ function ExamsPage() {
     queryKey: ["batch_student_counts"],
     queryFn: getBatchStudentCounts,
   });
+
+  const { data: allSubjects = [] } = useQuery({
+    queryKey: ["subjects"],
+    queryFn: () => listSubjects(),
+  });
+
+  const primaryBatch = useMemo(() => {
+    const first = form.batchSelections[0];
+    if (!first) return null;
+    return batches.find((b) => b.id === first.batch_id) || null;
+  }, [form.batchSelections, batches]);
+
+  const primaryBatchId = primaryBatch?.id || "";
+
+  // Available subjects for the selected batch (from subjects table + past exam papers)
+  const batchSubjects = useMemo(() => {
+    if (!primaryBatch) return [];
+
+    const fromSubjects = allSubjects
+      .filter(
+        (s) =>
+          s.batch_id === primaryBatch.id ||
+          (!s.batch_id && s.course_id === primaryBatch.course_id),
+      )
+      .map((s) => ({
+        id: s.id,
+        code: s.code || "",
+        name: s.name,
+        label: s.code ? `[${s.code}] ${s.name}` : s.name,
+      }));
+
+    const seenNames = new Set(fromSubjects.map((s) => s.name.toLowerCase().trim()));
+    const fromExams: Array<{ id: string; code: string; name: string; label: string }> = [];
+
+    for (const e of exams) {
+      const hasThisBatch = e.groups.some((g) => g.batch_id === primaryBatch.id);
+      const paperName = (e.subjectName || e.name || "").trim();
+      if (hasThisBatch && paperName && !seenNames.has(paperName.toLowerCase())) {
+        seenNames.add(paperName.toLowerCase());
+        fromExams.push({
+          id: `exam_${e.id}`,
+          code: "",
+          name: paperName,
+          label: paperName,
+        });
+      }
+    }
+
+    return [...fromSubjects, ...fromExams];
+  }, [allSubjects, exams, primaryBatch]);
 
   // Collect distinct categories from both defaults and existing exams
   const allCategories = useMemo(() => {
@@ -250,6 +304,7 @@ function ExamsPage() {
 
   const openNewExam = () => {
     setEditingExam(null);
+    setShowMultipleBatches(false);
     setForm({
       ...EMPTY_FORM,
       category: selectedFolder !== "all" ? selectedFolder : "Mid Semester",
@@ -260,6 +315,7 @@ function ExamsPage() {
 
   const openEditExam = (exam: ExamDetailed) => {
     setEditingExam(exam);
+    setShowMultipleBatches(exam.groups.length > 1);
     const isCustomCat = !DEFAULT_CATEGORIES.includes(exam.category);
     setForm({
       id: exam.id,
@@ -532,77 +588,208 @@ function ExamsPage() {
           </DialogHeader>
 
           <div className="space-y-4 py-2">
-            {/* Category / Folder Selection */}
-            <div className="space-y-2">
-              <Label>Examination Folder / Term</Label>
-              <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
-                {DEFAULT_CATEGORIES.map((cat) => (
-                  <Button
-                    key={cat}
-                    type="button"
-                    variant={form.category === cat ? "default" : "outline"}
-                    size="sm"
-                    className="text-xs"
-                    onClick={() => setForm({ ...form, category: cat })}
-                  >
-                    {cat}
-                  </Button>
-                ))}
-                <Button
-                  type="button"
-                  variant={form.category === "custom" ? "default" : "outline"}
-                  size="sm"
-                  className="text-xs"
-                  onClick={() => setForm({ ...form, category: "custom" })}
-                >
-                  + Custom Folder
-                </Button>
+            {/* 1. Batch Selection (First Requirement) */}
+            <div className="space-y-2 rounded-xl border border-primary/20 bg-primary/5 p-3.5">
+              <div className="flex items-center justify-between">
+                <Label className="text-xs font-semibold uppercase tracking-wider text-foreground flex items-center gap-1.5">
+                  <Users className="size-3.5 text-primary" />
+                  <span>1. Select Batch (Mandatory) *</span>
+                </Label>
+                {form.batchSelections.length > 0 && (
+                  <Badge variant="outline" className="font-mono text-[11px] bg-primary/10 text-primary border-primary/25">
+                    👥 {totalFormStudents} Students Enrolled
+                  </Badge>
+                )}
               </div>
 
-              {form.category === "custom" && (
-                <div className="pt-2">
+              <Select
+                value={primaryBatchId}
+                onValueChange={(selectedBatchId) => {
+                  const b = batches.find((x) => x.id === selectedBatchId);
+                  if (b) {
+                    setForm((prev) => ({
+                      ...prev,
+                      batchSelections: [{ course_id: b.course_id, batch_id: b.id }],
+                      subjectName: "", // Reset subject so user picks subject of this new batch
+                    }));
+                  }
+                }}
+              >
+                <SelectTrigger className="w-full bg-background font-medium">
+                  <SelectValue placeholder="-- Choose Batch (e.g. BTECH-CSE 2022-2026) --" />
+                </SelectTrigger>
+                <SelectContent className="max-h-60 overflow-y-auto">
+                  {batches.map((b) => {
+                    const count = batchCounts[b.id] || 0;
+                    const courseCode = b.courses?.code || "";
+                    const label = `${courseCode ? `[${courseCode}] ` : ""}${b.name}`;
+                    return (
+                      <SelectItem key={b.id} value={b.id}>
+                        <div className="flex items-center justify-between w-full gap-4">
+                          <span>{label}</span>
+                          <span className="text-muted-foreground text-xs font-mono">
+                            ({count} students)
+                          </span>
+                        </div>
+                      </SelectItem>
+                    );
+                  })}
+                </SelectContent>
+              </Select>
+
+              {/* Dynamic Enrolled Students Display */}
+              {primaryBatch ? (
+                <div className="flex items-center justify-between rounded-lg border border-primary/30 bg-background px-3 py-2 text-xs shadow-xs">
+                  <div className="flex items-center gap-2">
+                    <span className="font-medium text-foreground">
+                      Batch: {primaryBatch.courses?.code} — {primaryBatch.name}
+                    </span>
+                  </div>
+                  <span className="font-mono font-bold text-primary text-sm">
+                    Total Students: {totalFormStudents}
+                  </span>
+                </div>
+              ) : (
+                <p className="text-[11px] text-muted-foreground">
+                  👆 Pehle batch select karein — uske baad is batch ke subjects scroll list me load honge aur students count show hoga.
+                </p>
+              )}
+
+              {/* Multiple Batches Option */}
+              {batches.length > 1 && (
+                <div className="pt-1">
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="sm"
+                    className="h-7 text-xs text-muted-foreground hover:text-foreground px-2"
+                    onClick={() => setShowMultipleBatches((v) => !v)}
+                  >
+                    {showMultipleBatches ? "− Hide additional batches" : "+ Combine with other batches (Optional)"}
+                  </Button>
+
+                  {showMultipleBatches && (
+                    <div className="mt-2 rounded-lg border border-border p-2.5 max-h-36 overflow-y-auto space-y-1.5 bg-background">
+                      <p className="text-[11px] text-muted-foreground mb-1">
+                        Select any additional batches sitting for this same examination paper:
+                      </p>
+                      {batches.map((b) => {
+                        const isChecked = form.batchSelections.some((sel) => sel.batch_id === b.id);
+                        const count = batchCounts[b.id] || 0;
+                        const courseCode = b.courses?.code || "";
+                        const label = `${courseCode ? `[${courseCode}] ` : ""}${b.name}`;
+                        return (
+                          <label
+                            key={b.id}
+                            className="flex items-center justify-between gap-2 p-1.5 rounded hover:bg-muted/50 cursor-pointer text-xs"
+                          >
+                            <div className="flex items-center gap-2">
+                              <Checkbox
+                                checked={isChecked}
+                                onCheckedChange={() => toggleBatch(b.course_id, b.id)}
+                              />
+                              <span className="text-foreground">{label}</span>
+                            </div>
+                            <span className="font-mono text-muted-foreground text-[11px]">
+                              ({count} students)
+                            </span>
+                          </label>
+                        );
+                      })}
+                    </div>
+                  )}
+                </div>
+              )}
+            </div>
+
+            {/* 2. Subject Selection (Filtered strictly by selected batch) */}
+            <div className="space-y-2 rounded-xl border border-border bg-muted/15 p-3.5">
+              <Label htmlFor="subject-name" className="text-xs font-semibold uppercase tracking-wider text-foreground flex items-center gap-1.5">
+                <BookOpen className="size-3.5 text-primary" />
+                <span>2. Subject / Exam Paper Name *</span>
+              </Label>
+
+              {!primaryBatchId ? (
+                <div className="rounded-lg border border-dashed border-border bg-background/50 p-4 text-center text-xs text-muted-foreground">
+                  👆 Pehle upar Batch select karein — fir us batch ke subjects niche scroll option me open honge.
+                </div>
+              ) : (
+                <div className="space-y-2">
+                  {batchSubjects.length > 0 ? (
+                    <div className="space-y-1.5">
+                      <Select
+                        value={
+                          batchSubjects.some((s) => s.name === form.subjectName)
+                            ? form.subjectName
+                            : form.subjectName
+                              ? "__custom__"
+                              : ""
+                        }
+                        onValueChange={(val) => {
+                          if (val === "__custom__") {
+                            setForm((prev) => ({ ...prev, subjectName: "" }));
+                          } else {
+                            setForm((prev) => ({ ...prev, subjectName: val }));
+                          }
+                        }}
+                      >
+                        <SelectTrigger className="w-full bg-background font-medium">
+                          <SelectValue placeholder={`-- Scroll & pick subject (${batchSubjects.length} available) --`} />
+                        </SelectTrigger>
+                        <SelectContent className="max-h-60 overflow-y-auto">
+                          {batchSubjects.map((s) => (
+                            <SelectItem key={s.id} value={s.name}>
+                              {s.label}
+                            </SelectItem>
+                          ))}
+                          <SelectItem value="__custom__" className="text-primary font-semibold border-t border-border mt-1 pt-1">
+                            ✏️ + Type custom / new paper name...
+                          </SelectItem>
+                        </SelectContent>
+                      </Select>
+                      <p className="text-[11px] text-muted-foreground">
+                        Dropdown me se subject pick karein ya niche edit karein:
+                      </p>
+                    </div>
+                  ) : (
+                    <p className="text-[11px] text-amber-700 dark:text-amber-400">
+                      ℹ️ Is batch ke liye koi pre-saved subject nahi mila. Aap niche subject name manually likh sakte hain:
+                    </p>
+                  )}
+
                   <Input
-                    placeholder="e.g. Unit Test 1, Practical Examination, Re-Exam..."
-                    value={form.customCategory}
-                    onChange={(e) => setForm({ ...form, customCategory: e.target.value })}
-                    className="text-sm"
+                    id="subject-name"
+                    placeholder="e.g. Computer Networks, Database Management Systems, CS301..."
+                    value={form.subjectName}
+                    onChange={(e) => setForm({ ...form, subjectName: e.target.value })}
+                    className="bg-background"
                   />
                 </div>
               )}
             </div>
 
-            {/* Subject / Paper Name */}
-            <div className="space-y-2">
-              <Label htmlFor="subject-name">Subject / Exam Paper Name</Label>
-              <Input
-                id="subject-name"
-                placeholder="e.g. Computer Networks, Database Management Systems, CS301..."
-                value={form.subjectName}
-                onChange={(e) => setForm({ ...form, subjectName: e.target.value })}
-              />
-            </div>
-
-            {/* Date and Session */}
-            <div className="grid gap-4 sm:grid-cols-2">
-              <div className="space-y-2">
-                <Label htmlFor="exam-date">Exam Date</Label>
+            {/* 3. Schedule: Date & Session */}
+            <div className="grid gap-3 sm:grid-cols-2">
+              <div className="space-y-1.5">
+                <Label htmlFor="exam-date" className="text-xs font-medium">3. Exam Date *</Label>
                 <Input
                   id="exam-date"
                   type="date"
                   value={form.exam_date}
                   onChange={(e) => setForm({ ...form, exam_date: e.target.value })}
+                  className="bg-background"
                 />
               </div>
 
-              <div className="space-y-2">
-                <Label>Session</Label>
+              <div className="space-y-1.5">
+                <Label className="text-xs font-medium">Session *</Label>
                 <Select
                   value={form.session}
                   onValueChange={(val: "morning" | "afternoon" | "evening") =>
                     setForm({ ...form, session: val })
                   }
                 >
-                  <SelectTrigger>
+                  <SelectTrigger className="bg-background">
                     <SelectValue />
                   </SelectTrigger>
                   <SelectContent>
@@ -614,76 +801,43 @@ function ExamsPage() {
               </div>
             </div>
 
-            {/* Appearing Batches & Student Counts */}
-            <div className="space-y-2.5 pt-2 border-t border-border">
-              <div className="flex items-center justify-between">
-                <div>
-                  <Label className="text-sm font-semibold">Select Appearing Batches</Label>
-                  <p className="text-xs text-muted-foreground">
-                    Active student counts appear in brackets beside each batch.
-                  </p>
-                </div>
-                {courses.length > 1 && (
-                  <Select
-                    value={courseFilterInDialog}
-                    onValueChange={setCourseFilterInDialog}
+            {/* 4. Category / Folder Selection */}
+            <div className="space-y-2 pt-1 border-t border-border">
+              <Label className="text-xs font-medium text-muted-foreground">Examination Folder / Term</Label>
+              <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
+                {DEFAULT_CATEGORIES.map((cat) => (
+                  <Button
+                    key={cat}
+                    type="button"
+                    variant={form.category === cat ? "default" : "outline"}
+                    size="sm"
+                    className="text-xs h-8"
+                    onClick={() => setForm({ ...form, category: cat })}
                   >
-                    <SelectTrigger className="w-36 h-8 text-xs">
-                      <SelectValue placeholder="All Courses" />
-                    </SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="all">All Courses</SelectItem>
-                      {courses.map((c) => (
-                        <SelectItem key={c.id} value={c.id}>
-                          {c.code}
-                        </SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
-                )}
+                    {cat}
+                  </Button>
+                ))}
+                <Button
+                  type="button"
+                  variant={form.category === "custom" ? "default" : "outline"}
+                  size="sm"
+                  className="text-xs h-8"
+                  onClick={() => setForm({ ...form, category: "custom" })}
+                >
+                  + Custom Folder
+                </Button>
               </div>
 
-              <div className="rounded-lg border border-border p-3 max-h-48 overflow-y-auto space-y-2 bg-muted/20">
-                {batches.length === 0 ? (
-                  <p className="text-xs text-muted-foreground text-center py-4">
-                    No batches found. Please add courses and batches first.
-                  </p>
-                ) : (
-                  dialogBatches.map((b) => {
-                    const isChecked = form.batchSelections.some((sel) => sel.batch_id === b.id);
-                    const count = batchCounts[b.id] || 0;
-                    const courseCode = b.courses?.code || "";
-                    const label = `${courseCode} ${b.name}`.trim();
-
-                    return (
-                      <label
-                        key={b.id}
-                        className="flex items-center justify-between gap-2 p-2 rounded hover:bg-muted/50 cursor-pointer text-xs"
-                      >
-                        <div className="flex items-center gap-2.5">
-                          <Checkbox
-                            checked={isChecked}
-                            onCheckedChange={() => toggleBatch(b.course_id, b.id)}
-                          />
-                          <span className="font-medium text-foreground">{label}</span>
-                        </div>
-                        <span className="font-mono text-muted-foreground bg-muted px-2 py-0.5 rounded text-[11px]">
-                          ({count} students)
-                        </span>
-                      </label>
-                    );
-                  })
-                )}
-              </div>
-
-              <div className="flex items-center justify-between bg-primary/5 border border-primary/20 rounded-md px-3 py-2 text-xs">
-                <span className="text-muted-foreground">
-                  Selected Batches: <strong className="text-foreground">{form.batchSelections.length}</strong>
-                </span>
-                <span className="font-mono font-semibold text-primary">
-                  Total Enrolled: ({totalFormStudents} students)
-                </span>
-              </div>
+              {form.category === "custom" && (
+                <div className="pt-1">
+                  <Input
+                    placeholder="e.g. Unit Test 1, Practical Examination, Re-Exam..."
+                    value={form.customCategory}
+                    onChange={(e) => setForm({ ...form, customCategory: e.target.value })}
+                    className="text-xs bg-background"
+                  />
+                </div>
+              )}
             </div>
 
             {/* Real-time Clash Detection Warning */}
