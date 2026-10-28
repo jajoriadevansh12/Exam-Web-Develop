@@ -210,20 +210,56 @@ function ProfessorPortalPage() {
         return;
       }
 
-      // Fetch seating allocations strictly in seat order (Row 1 Seat 1, Row 1 Seat 2...)
-      const { data: allocations } = await supabase
+      // 1. Fetch seating allocations strictly in seat order (Row 1 Seat 1, Row 1 Seat 2...)
+      // Explicitly select id, student_id, row_number, seat_number, group_label, and joined students
+      const { data: allocations, error: allocErr } = await supabase
         .from("seat_allocations")
         .select(`
+          id,
+          student_id,
           row_number,
           seat_number,
-          student:students(id, name, registration_number, roll_number)
+          group_label,
+          students (
+            id,
+            name,
+            registration_number,
+            roll_number
+          )
         `)
         .eq("plan_id", plan.id)
         .eq("room_id", duty.room_id)
         .order("row_number", { ascending: true })
         .order("seat_number", { ascending: true });
 
-      // Load saved attendance for this room (shared across all professors in this room)
+      if (allocErr) {
+        console.error("Error fetching seat allocations:", allocErr);
+      }
+
+      // 2. Extract student IDs for fallback direct query
+      const studentIds = (allocations || [])
+        .map((a: any) => a.student_id)
+        .filter(Boolean);
+
+      let studentMap: Record<string, { id: string; name: string; registration_number: string; roll_number: string | null }> = {};
+      if (studentIds.length > 0) {
+        try {
+          const { data: directStudents } = await supabase
+            .from("students")
+            .select("id, name, registration_number, roll_number")
+            .in("id", studentIds);
+
+          if (directStudents && directStudents.length > 0) {
+            directStudents.forEach((st: any) => {
+              studentMap[st.id] = st;
+            });
+          }
+        } catch (stErr) {
+          console.warn("Direct student query note:", stErr);
+        }
+      }
+
+      // 3. Load saved attendance for this room (shared across all professors in this room)
       const roster = await getRoomAttendance(duty.exam_id, duty.room_id);
       setLastSavedInfo(
         roster.last_updated_at
@@ -231,15 +267,32 @@ function ProfessorPortalPage() {
           : null
       );
 
+      // 4. Map allocations with guaranteed unique student_id and real student name
       if (allocations) {
-        const list: RoomStudent[] = allocations.map((a: any) => {
-          const studentId = a.student?.id;
+        const list: RoomStudent[] = allocations.map((a: any, idx: number) => {
+          // Check embedded students (could be a.students or a.student, array or single object)
+          const embedded = Array.isArray(a.students)
+            ? a.students[0]
+            : a.students || (Array.isArray(a.student) ? a.student[0] : a.student);
+
+          // Direct lookup by a.student_id
+          const direct = a.student_id ? studentMap[a.student_id] : null;
+
+          const st = direct || embedded || {};
+
+          // Guaranteed non-empty unique identifier for this student
+          const studentId = a.student_id || st.id || a.id || `seat-${duty.room_id}-${a.row_number}-${a.seat_number}`;
+
+          const name = st.name || (st.registration_number ? `Student (${st.registration_number})` : `Candidate #${idx + 1}`);
+          const regNo = st.registration_number || (a.student_id ? a.student_id.slice(0, 8).toUpperCase() : `—`);
+          const rollNo = st.roll_number || null;
+
           const status = roster.attendance[studentId];
           return {
             student_id: studentId,
-            name: a.student?.name || "Student",
-            registration_number: a.student?.registration_number || "—",
-            roll_number: a.student?.roll_number || null,
+            name,
+            registration_number: regNo,
+            roll_number: rollNo,
             row_number: a.row_number,
             seat_number: a.seat_number,
             present: status ? status === "present" : true, // default to present
@@ -248,6 +301,7 @@ function ProfessorPortalPage() {
         setRoomStudents(list);
       }
     } catch (err) {
+      console.error(err);
       toast.error("Failed to load room seating and attendance");
     } finally {
       setLoadingStudents(false);
