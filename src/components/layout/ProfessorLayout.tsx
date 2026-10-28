@@ -10,15 +10,28 @@ import {
   FileCheck,
   Clock,
   Sparkles,
+  Bell,
+  MapPin,
+  ChevronRight,
 } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { useAuth } from "@/lib/auth";
 import { UNIVERSITY_NAME } from "@/lib/db";
 import { cn } from "@/lib/utils";
 
 export type ProfessorNavTab = "duties" | "leaves" | "guidelines";
+
+export type ProfessorNotification = {
+  id: string;
+  title: string;
+  room?: string;
+  session?: string;
+  date?: string;
+  notifiedAt?: string | null;
+};
 
 export function ProfessorLayout({
   title,
@@ -26,6 +39,8 @@ export function ProfessorLayout({
   activeTab,
   onTabChange,
   professorInfo,
+  notifications = [],
+  onNotificationClick,
   actions,
   children,
 }: {
@@ -41,6 +56,8 @@ export function ProfessorLayout({
     maxDuties?: number;
     assignedDutiesCount?: number;
   };
+  notifications?: ProfessorNotification[];
+  onNotificationClick?: (notification: ProfessorNotification) => void;
   actions?: ReactNode;
   children: ReactNode;
 }) {
@@ -125,6 +142,11 @@ export function ProfessorLayout({
                         {item.desc}
                       </p>
                     </div>
+                    {item.id === "duties" && notifications.length > 0 && (
+                      <span className="ml-auto flex size-5 items-center justify-center rounded-full bg-gold text-[10px] font-bold text-black shrink-0">
+                        {notifications.length}
+                      </span>
+                    )}
                   </button>
                 );
               })}
@@ -222,6 +244,114 @@ export function ProfessorLayout({
               Invigilator Account
             </Badge>
           </div>
+
+          {/* Notification Bell */}
+          <Popover>
+            <PopoverTrigger asChild>
+              <Button
+                variant="ghost"
+                size="icon"
+                className="relative size-9 rounded-full text-foreground hover:bg-muted"
+                aria-label="View notifications"
+              >
+                <Bell className="size-4.5" />
+                {notifications.length > 0 && (
+                  <span className="absolute -top-0.5 -right-0.5 flex size-4.5 items-center justify-center rounded-full bg-emerald-600 text-[10px] font-bold text-white shadow-xs animate-pulse">
+                    {notifications.length > 9 ? "9+" : notifications.length}
+                  </span>
+                )}
+              </Button>
+            </PopoverTrigger>
+            <PopoverContent
+              align="end"
+              sideOffset={8}
+              className="w-80 sm:w-96 p-0 shadow-xl border-border rounded-xl overflow-hidden bg-card text-card-foreground"
+            >
+              <div className="flex items-center justify-between border-b border-border bg-muted/40 px-4 py-3">
+                <div className="flex items-center gap-2">
+                  <Bell className="size-4 text-primary" />
+                  <h3 className="font-semibold text-sm text-foreground">Duty Notifications</h3>
+                </div>
+                {notifications.length > 0 ? (
+                  <Badge className="bg-emerald-600 text-white text-[10px] px-2 py-0.5">
+                    {notifications.length} New
+                  </Badge>
+                ) : (
+                  <span className="text-[11px] text-muted-foreground">Up to date</span>
+                )}
+              </div>
+
+              <div className="max-h-80 overflow-y-auto divide-y divide-border">
+                {notifications.length === 0 ? (
+                  <div className="p-6 text-center space-y-2">
+                    <div className="mx-auto flex size-10 items-center justify-center rounded-full bg-muted text-muted-foreground">
+                      <Bell className="size-5" />
+                    </div>
+                    <p className="text-xs font-semibold text-foreground">No new notifications</p>
+                    <p className="text-[11px] text-muted-foreground">
+                      When the exam branch assigns and notifies invigilation duties, they will appear here.
+                    </p>
+                  </div>
+                ) : (
+                  notifications.map((n) => (
+                    <div
+                      key={n.id}
+                      onClick={() => {
+                        if (onNotificationClick) onNotificationClick(n);
+                      }}
+                      className="p-3.5 hover:bg-muted/50 cursor-pointer transition-colors space-y-1.5"
+                    >
+                      <div className="flex items-start justify-between gap-2">
+                        <div className="flex items-center gap-1.5 font-semibold text-xs text-foreground">
+                          <span className="size-2 rounded-full bg-emerald-500 shrink-0" />
+                          <span className="line-clamp-1">{n.title}</span>
+                        </div>
+                        <Badge variant="outline" className="text-[9px] px-1.5 py-0 border-emerald-500/30 text-emerald-600 shrink-0">
+                          Duty Notified
+                        </Badge>
+                      </div>
+
+                      <div className="flex flex-wrap items-center gap-2 text-[11px] text-muted-foreground">
+                        {n.room && (
+                          <span className="flex items-center gap-1 font-medium text-foreground">
+                            <MapPin className="size-3 text-primary" />
+                            {n.room}
+                          </span>
+                        )}
+                        {n.date && (
+                          <span className="flex items-center gap-1">
+                            <CalendarDays className="size-3 text-primary" />
+                            {n.date}
+                          </span>
+                        )}
+                      </div>
+
+                      {n.session && (
+                        <p className="text-[10px] text-muted-foreground">
+                          {n.session}
+                        </p>
+                      )}
+                    </div>
+                  ))
+                )}
+              </div>
+
+              {notifications.length > 0 && (
+                <div className="p-2 border-t border-border bg-muted/20 text-center">
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    className="w-full text-xs text-primary font-semibold h-7"
+                    onClick={() => {
+                      if (onTabChange) onTabChange("duties");
+                    }}
+                  >
+                    View All Invigilation Duties <ChevronRight className="size-3 ml-1" />
+                  </Button>
+                </div>
+              )}
+            </PopoverContent>
+          </Popover>
 
           <Button variant="outline" size="sm" onClick={() => void signOut()} className="gap-1.5 text-xs">
             <LogOut className="size-3.5" /> Sign out

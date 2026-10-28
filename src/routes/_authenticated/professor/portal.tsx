@@ -485,12 +485,25 @@ function ProfessorPortalPage() {
     return matchesSearch && matchesFilter;
   });
 
+  const notifications = duties
+    .filter((d) => d.notified)
+    .map((d) => ({
+      id: d.id,
+      title: `Invigilation: ${d.exam_name}`,
+      room: `Hall ${d.room_number} (${d.block})`,
+      session: d.session === "morning" ? "Morning Session (09:30 AM)" : "Evening Session (01:30 PM)",
+      date: d.exam_date,
+      notifiedAt: d.notified_at,
+    }));
+
   return (
     <ProfessorLayout
       title="Faculty & Invigilation Console"
       description="Manage exam duties, student room attendance, and faculty leave requests"
       activeTab={activeTab}
       onTabChange={setActiveTab}
+      notifications={notifications}
+      onNotificationClick={() => setActiveTab("duties")}
       professorInfo={{
         name: professor?.name,
         employeeId: professor?.employee_id,
