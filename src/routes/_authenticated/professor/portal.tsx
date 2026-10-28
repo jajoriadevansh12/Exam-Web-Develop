@@ -211,22 +211,9 @@ function ProfessorPortalPage() {
       }
 
       // 1. Fetch seating allocations strictly in seat order (Row 1 Seat 1, Row 1 Seat 2...)
-      // Explicitly select id, student_id, row_number, seat_number, group_label, and joined students
       const { data: allocations, error: allocErr } = await supabase
         .from("seat_allocations")
-        .select(`
-          id,
-          student_id,
-          row_number,
-          seat_number,
-          group_label,
-          students (
-            id,
-            name,
-            registration_number,
-            roll_number
-          )
-        `)
+        .select("id, student_id, row_number, seat_number, group_label")
         .eq("plan_id", plan.id)
         .eq("room_id", duty.room_id)
         .order("row_number", { ascending: true })
@@ -236,12 +223,34 @@ function ProfessorPortalPage() {
         console.error("Error fetching seat allocations:", allocErr);
       }
 
-      // 2. Extract student IDs for fallback direct query
-      const studentIds = (allocations || [])
-        .map((a: any) => a.student_id)
-        .filter(Boolean);
+      // 2. Query view_seating_plan_master for verified student names & registration numbers
+      // This system view has granted access to all roles and bypasses table-level RLS
+      const viewMap = new Map<string, { student_name: string; registration_number: string; roll_number: string | null }>();
+      try {
+        let viewQuery = supabase
+          .from("view_seating_plan_master" as any)
+          .select("row_number, seat_number, student_name, registration_number, roll_number")
+          .eq("hall_number", duty.room_number)
+          .eq("exam_date", duty.exam_date)
+          .eq("session", duty.session);
 
+        if (duty.exam_name) {
+          viewQuery = viewQuery.eq("exam_paper", duty.exam_name);
+        }
+
+        const { data: viewRows } = await viewQuery;
+        if (viewRows) {
+          viewRows.forEach((v: any) => {
+            viewMap.set(`R${v.row_number}-S${v.seat_number}`, v);
+          });
+        }
+      } catch (vErr) {
+        console.warn("view_seating_plan_master note:", vErr);
+      }
+
+      // 3. Fallback direct student table query
       let studentMap: Record<string, { id: string; name: string; registration_number: string; roll_number: string | null }> = {};
+      const studentIds = (allocations || []).map((a: any) => a.student_id).filter(Boolean);
       if (studentIds.length > 0) {
         try {
           const { data: directStudents } = await supabase
@@ -259,7 +268,7 @@ function ProfessorPortalPage() {
         }
       }
 
-      // 3. Load saved attendance for this room (shared across all professors in this room)
+      // 4. Load saved attendance for this room (shared across all professors in this room)
       const roster = await getRoomAttendance(duty.exam_id, duty.room_id);
       setLastSavedInfo(
         roster.last_updated_at
@@ -267,25 +276,30 @@ function ProfessorPortalPage() {
           : null
       );
 
-      // 4. Map allocations with guaranteed unique student_id and real student name
+      // 5. Map allocations with verified real student names and unique student_id
       if (allocations) {
         const list: RoomStudent[] = allocations.map((a: any, idx: number) => {
-          // Check embedded students (could be a.students or a.student, array or single object)
-          const embedded = Array.isArray(a.students)
-            ? a.students[0]
-            : a.students || (Array.isArray(a.student) ? a.student[0] : a.student);
+          const seatCoordKey = `R${a.row_number}-S${a.seat_number}`;
+          const viewInfo = viewMap.get(seatCoordKey);
+          const directInfo = a.student_id ? studentMap[a.student_id] : null;
 
-          // Direct lookup by a.student_id
-          const direct = a.student_id ? studentMap[a.student_id] : null;
+          // Guaranteed unique identifier
+          const studentId = a.student_id || a.id || `seat-${duty.room_id}-${a.row_number}-${a.seat_number}`;
 
-          const st = direct || embedded || {};
+          const name =
+            viewInfo?.student_name ||
+            directInfo?.name ||
+            `Student #${idx + 1}`;
 
-          // Guaranteed non-empty unique identifier for this student
-          const studentId = a.student_id || st.id || a.id || `seat-${duty.room_id}-${a.row_number}-${a.seat_number}`;
+          const regNo =
+            viewInfo?.registration_number ||
+            directInfo?.registration_number ||
+            (a.student_id ? a.student_id.slice(0, 8).toUpperCase() : `—`);
 
-          const name = st.name || (st.registration_number ? `Student (${st.registration_number})` : `Candidate #${idx + 1}`);
-          const regNo = st.registration_number || (a.student_id ? a.student_id.slice(0, 8).toUpperCase() : `—`);
-          const rollNo = st.roll_number || null;
+          const rollNo =
+            viewInfo?.roll_number ||
+            directInfo?.roll_number ||
+            null;
 
           const status = roster.attendance[studentId];
           return {
