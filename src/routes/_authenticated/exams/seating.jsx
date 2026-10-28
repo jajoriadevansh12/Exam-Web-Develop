@@ -224,7 +224,14 @@ function SeatingPage() {
     return map;
   }, [availableBatchOptions]);
 
-  // Auto-populate Batch A and Batch B when 2+ distinct batches exist
+  // Default to simple strategy if fewer than 2 distinct batches exist
+  useEffect(() => {
+    if (!isAlternationAllowed && strategy !== "simple") {
+      setStrategy("simple");
+    } else if (isAlternationAllowed && strategy === "simple" && distinctBatches.length >= 2) {
+      setStrategy("alternate");
+    }
+  }, [isAlternationAllowed, distinctBatches.length]);
 
   // Auto-populate Batch A and Batch B when 2+ distinct batches exist
   useEffect(() => {
@@ -835,41 +842,40 @@ function SeatingPage() {
 
                     <button
                       type="button"
-                      onClick={() => setStrategy("alternate")}
-                      className={`p-2.5 rounded-lg border text-xs font-semibold transition-all flex flex-col items-center justify-center gap-1 cursor-pointer ${
-                        strategy === "alternate"
-                          ? "border-primary bg-primary/10 text-primary ring-1 ring-primary/30 shadow-2xs"
-                          : "border-border hover:bg-muted/50 text-muted-foreground"
+                      disabled={!isAlternationAllowed}
+                      onClick={() => {
+                        if (!isAlternationAllowed) {
+                          toast.error("Alternate seating cannot be applied to a single batch. At least 2 distinct batches/courses are required.");
+                          return;
+                        }
+                        setStrategy("alternate");
+                      }}
+                      className={`p-2.5 rounded-lg border text-xs font-semibold transition-all flex flex-col items-center justify-center gap-1 ${
+                        !isAlternationAllowed
+                          ? "opacity-50 cursor-not-allowed border-border/50 bg-muted/20 text-muted-foreground"
+                          : strategy === "alternate"
+                            ? "border-primary bg-primary/10 text-primary ring-1 ring-primary/30 shadow-2xs cursor-pointer"
+                            : "border-border hover:bg-muted/50 text-muted-foreground cursor-pointer"
                       }`}
                     >
                       <span className="flex items-center gap-1">
                         <Sparkles className="size-3" /> Alternate Seating
                       </span>
                       <span className="text-[10px] font-normal opacity-80">
-                        {isAlternationAllowed
-                          ? "Merge 2 Batches Column-wise"
-                          : "TC06: Empty Buffer Desks (1, 3, 5...)"}
+                        {isAlternationAllowed ? "Merge 2 Batches Column-wise" : "Requires 2+ Different Batches"}
                       </span>
                     </button>
                   </div>
 
-                  {/* Informational banner when sitting has only 1 batch */}
+                  {/* Warning banner when sitting has only 1 batch */}
                   {!isAlternationAllowed && (
-                    <div className="p-3 rounded-lg border border-primary/30 bg-primary/5 text-foreground text-xs space-y-1">
-                      <div className="flex items-center gap-1.5 font-bold text-primary">
-                        <Sparkles className="size-3.5" />
-                        <span>Single Batch: {distinctBatches[0]?.label || "1 Batch"}</span>
+                    <div className="p-3 rounded-lg border border-amber-300/60 bg-amber-500/10 text-amber-900 dark:text-amber-200 text-xs space-y-1">
+                      <div className="flex items-center gap-1.5 font-bold">
+                        <AlertTriangle className="size-3.5 text-amber-600 dark:text-amber-400" />
+                        <span>Alternate Seating Unavailable for Single Batch</span>
                       </div>
-                      <p className="text-[11px] text-muted-foreground leading-relaxed">
-                        {strategy === "alternate" ? (
-                          <>
-                            <strong className="text-foreground">TC06 Active (Alternate with Empty Buffer Desks):</strong> Students are placed on alternate desks (Desk 1, 3, 5...) leaving empty buffer desks in between to prevent copying.
-                          </>
-                        ) : (
-                          <>
-                            <strong className="text-foreground">Simple Sequential Seating:</strong> Students are seated sequentially on every desk. Click <strong>Alternate Seating</strong> above to enable empty buffer desks (TC06).
-                          </>
-                        )}
+                      <p className="text-[11px] text-amber-800 dark:text-amber-300 leading-relaxed">
+                        Alternate seating requires at least <strong>2 distinct batches</strong> (e.g. 2nd Year ⇄ 3rd Year, or CSE ⇄ BBA) to prevent same-paper copying. Since this exam sitting contains only <strong>1 batch</strong> ({distinctBatches[0]?.label || "Single Batch"}), <strong>Simple Sequential Seating</strong> is active.
                       </p>
                     </div>
                   )}
@@ -1354,9 +1360,7 @@ function SeatingPage() {
                                           >
                                             {cell.isVacant ? (
                                               <span className="font-mono text-[10px] text-muted-foreground font-medium">
-                                                {strategy === "alternate" && !isAlternationAllowed
-                                                  ? "Empty Buffer"
-                                                  : "Vacant Seat"}
+                                                Vacant Seat
                                               </span>
                                             ) : (
                                               <>

@@ -739,10 +739,15 @@ export async function previewSeatingForDate(
     listRooms(),
   ]);
 
-  // Strategy resolution:
-  // When distinctBatches >= 2: Alternates between batches (TC05)
-  // When distinctBatches < 2: Alternates with empty buffer desks (TC06)
-  const effectiveStrategy = strategy;
+  // STRICT RULE: Alternation is NEVER allowed with the same batch!
+  // If fewer than 2 distinct batches exist, force Simple strategy.
+  let effectiveStrategy = strategy;
+  if (
+    (effectiveStrategy === "alternate" || effectiveStrategy === "alternate_columns" || effectiveStrategy === "alternate_rows") &&
+    (distinctBatches?.length ?? 0) < 2
+  ) {
+    effectiveStrategy = "simple";
+  }
 
   const shapes: RoomShape[] = rooms
     .filter((room) => roomIds.includes(room.id))
