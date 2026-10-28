@@ -17,6 +17,12 @@ import {
   Sparkles,
   Briefcase,
   ShieldCheck,
+  Save,
+  Search,
+  CheckCheck,
+  UserCheck,
+  UserX,
+  RotateCcw,
 } from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
@@ -35,6 +41,11 @@ import { useAuth } from "@/lib/auth";
 import { UNIVERSITY_NAME } from "@/lib/db";
 import { ProfessorLayout, type ProfessorNavTab } from "@/components/layout/ProfessorLayout";
 import { GridBackdrop } from "@/components/effects/GridBackdrop";
+import {
+  getRoomAttendance,
+  saveRoomAttendance,
+  type AttendanceStatus,
+} from "@/lib/attendance";
 
 export const Route = createFileRoute("/_authenticated/professor/portal")({
   head: () => ({
@@ -92,10 +103,15 @@ function ProfessorPortalPage() {
   const [loading, setLoading] = useState(true);
   const [activeTab, setActiveTab] = useState<ProfessorNavTab>("duties");
 
-  // Room Students Modal
+  // Room Students Modal & Attendance
   const [selectedDuty, setSelectedDuty] = useState<InvigilationDuty | null>(null);
   const [roomStudents, setRoomStudents] = useState<RoomStudent[]>([]);
   const [loadingStudents, setLoadingStudents] = useState(false);
+  const [savingAttendance, setSavingAttendance] = useState(false);
+  const [studentSearch, setStudentSearch] = useState("");
+  const [attendanceFilter, setAttendanceFilter] = useState<"all" | "present" | "absent">("all");
+  const [lastSavedInfo, setLastSavedInfo] = useState<{ by?: string | null; at?: string | null } | null>(null);
+  const [hasUnsavedChanges, setHasUnsavedChanges] = useState(false);
 
   // New Leave Form
   const [leaveDate, setLeaveDate] = useState("");
@@ -178,6 +194,9 @@ function ProfessorPortalPage() {
   async function handleOpenRoomSheet(duty: InvigilationDuty) {
     setSelectedDuty(duty);
     setLoadingStudents(true);
+    setStudentSearch("");
+    setAttendanceFilter("all");
+    setHasUnsavedChanges(false);
     try {
       const { data: plan } = await supabase
         .from("seating_plans")
@@ -187,9 +206,11 @@ function ProfessorPortalPage() {
 
       if (!plan) {
         setRoomStudents([]);
+        setLastSavedInfo(null);
         return;
       }
 
+      // Fetch seating allocations strictly in seat order (Row 1 Seat 1, Row 1 Seat 2...)
       const { data: allocations } = await supabase
         .from("seat_allocations")
         .select(`
@@ -202,29 +223,111 @@ function ProfessorPortalPage() {
         .order("row_number", { ascending: true })
         .order("seat_number", { ascending: true });
 
+      // Load saved attendance for this room (shared across all professors in this room)
+      const roster = await getRoomAttendance(duty.exam_id, duty.room_id);
+      setLastSavedInfo(
+        roster.last_updated_at
+          ? { by: roster.last_updated_by, at: roster.last_updated_at }
+          : null
+      );
+
       if (allocations) {
-        const list: RoomStudent[] = allocations.map((a: any) => ({
-          student_id: a.student?.id,
-          name: a.student?.name || "Student",
-          registration_number: a.student?.registration_number || "—",
-          roll_number: a.student?.roll_number || null,
-          row_number: a.row_number,
-          seat_number: a.seat_number,
-          present: true,
-        }));
+        const list: RoomStudent[] = allocations.map((a: any) => {
+          const studentId = a.student?.id;
+          const status = roster.attendance[studentId];
+          return {
+            student_id: studentId,
+            name: a.student?.name || "Student",
+            registration_number: a.student?.registration_number || "—",
+            roll_number: a.student?.roll_number || null,
+            row_number: a.row_number,
+            seat_number: a.seat_number,
+            present: status ? status === "present" : true, // default to present
+          };
+        });
         setRoomStudents(list);
       }
     } catch (err) {
-      toast.error("Failed to load room seating list");
+      toast.error("Failed to load room seating and attendance");
     } finally {
       setLoadingStudents(false);
     }
   }
 
+  // Subscribe to realtime attendance updates while dialog is open (for co-invigilators)
+  useEffect(() => {
+    if (!selectedDuty) return;
+
+    const channelName = `attendance-${selectedDuty.exam_id}-${selectedDuty.room_id}`;
+    const channel = supabase.channel(channelName);
+
+    channel
+      .on("broadcast", { event: "attendance_update" }, (payload: any) => {
+        const data = payload?.payload;
+        if (!data || !data.attendance) return;
+
+        setRoomStudents((prev) =>
+          prev.map((s) => ({
+            ...s,
+            present: data.attendance[s.student_id] !== "absent",
+          }))
+        );
+        setLastSavedInfo({ by: data.last_updated_by, at: data.last_updated_at });
+        setHasUnsavedChanges(false);
+        toast.info(
+          `Live sync: Attendance updated by ${data.last_updated_by || "co-invigilator"}`,
+          { id: "co-invig-sync" }
+        );
+      })
+      .subscribe();
+
+    return () => {
+      void supabase.removeChannel(channel);
+    };
+  }, [selectedDuty]);
+
   function toggleAttendance(studentId: string) {
     setRoomStudents((prev) =>
       prev.map((s) => (s.student_id === studentId ? { ...s, present: !s.present } : s)),
     );
+    setHasUnsavedChanges(true);
+  }
+
+  function handleMarkAll(present: boolean) {
+    setRoomStudents((prev) => prev.map((s) => ({ ...s, present })));
+    setHasUnsavedChanges(true);
+    toast.info(present ? "All students marked Present" : "All students marked Absent");
+  }
+
+  async function handleSaveAttendance() {
+    if (!selectedDuty) return;
+    setSavingAttendance(true);
+    try {
+      const records = roomStudents.map((s) => ({
+        student_id: s.student_id,
+        status: (s.present ? "present" : "absent") as AttendanceStatus,
+      }));
+
+      await saveRoomAttendance({
+        examId: selectedDuty.exam_id,
+        roomId: selectedDuty.room_id,
+        records,
+        markedById: professor?.id,
+        markedByName: professor?.name || "Invigilator",
+      });
+
+      setLastSavedInfo({
+        by: professor?.name || "You",
+        at: new Date().toISOString(),
+      });
+      setHasUnsavedChanges(false);
+      toast.success("Attendance saved successfully! Synced across invigilators & Student Portal.");
+    } catch (err: any) {
+      console.error(err);
+      toast.error(err.message || "Failed to save room attendance");
+    } finally {
+      setSavingAttendance(false);
+    }
   }
 
   // Handle Apply Leave
@@ -261,6 +364,24 @@ function ProfessorPortalPage() {
       setSubmittingLeave(false);
     }
   }
+
+  const filteredStudents = roomStudents.filter((s) => {
+    const q = studentSearch.trim().toLowerCase();
+    const matchesSearch =
+      !q ||
+      s.name.toLowerCase().includes(q) ||
+      s.registration_number.toLowerCase().includes(q) ||
+      (s.roll_number && s.roll_number.toLowerCase().includes(q)) ||
+      `r${s.row_number}-s${s.seat_number}`.toLowerCase().includes(q) ||
+      `row ${s.row_number}`.toLowerCase().includes(q);
+
+    const matchesFilter =
+      attendanceFilter === "all" ||
+      (attendanceFilter === "present" && s.present) ||
+      (attendanceFilter === "absent" && !s.present);
+
+    return matchesSearch && matchesFilter;
+  });
 
   return (
     <ProfessorLayout
@@ -616,96 +737,233 @@ function ProfessorPortalPage() {
 
       {/* Room Attendance Modal */}
       <Dialog open={!!selectedDuty} onOpenChange={() => setSelectedDuty(null)}>
-        <DialogContent className="max-w-2xl max-h-[85vh] overflow-y-auto">
-          <DialogHeader>
-            <DialogTitle className="flex items-center justify-between">
+        <DialogContent className="max-w-3xl max-h-[90vh] overflow-hidden flex flex-col p-0">
+          <DialogHeader className="p-6 pb-4 border-b border-border bg-card">
+            <div className="flex flex-wrap items-start justify-between gap-4">
               <div>
-                <span>Room {selectedDuty?.room_number} Attendance & Seating</span>
-                <p className="text-xs font-normal text-muted-foreground mt-0.5">
-                  {selectedDuty?.exam_name} • {selectedDuty?.exam_date} ({selectedDuty?.session})
+                <DialogTitle className="text-xl font-bold flex items-center gap-2">
+                  <span>Room {selectedDuty?.room_number} Attendance & Seating</span>
+                  <Badge variant="outline" className="font-mono text-xs">
+                    {selectedDuty?.block} Block
+                  </Badge>
+                </DialogTitle>
+                <p className="text-xs text-muted-foreground mt-1">
+                  {selectedDuty?.exam_name} • {selectedDuty?.exam_date} •{" "}
+                  <span className="font-semibold text-foreground">
+                    {selectedDuty?.session === "morning"
+                      ? "Morning (09:30 AM - 12:30 PM)"
+                      : "Evening (01:30 PM - 04:30 PM)"}
+                  </span>
                 </p>
               </div>
-            </DialogTitle>
+
+              <div className="flex items-center gap-2">
+                <Button
+                  size="sm"
+                  onClick={handleSaveAttendance}
+                  disabled={savingAttendance || loadingStudents || roomStudents.length === 0}
+                  className="gap-2 bg-emerald-600 hover:bg-emerald-700 text-white font-semibold"
+                >
+                  {savingAttendance ? (
+                    <Loader2 className="size-4 animate-spin" />
+                  ) : (
+                    <Save className="size-4" />
+                  )}
+                  Save Room Attendance
+                </Button>
+              </div>
+            </div>
+
+            {/* Multi-Invigilator Notice Banner */}
+            <div className="mt-3 rounded-lg bg-primary/10 border border-primary/20 px-3 py-2 text-xs text-foreground flex items-center justify-between gap-2">
+              <div className="flex items-center gap-2">
+                <Users className="size-4 text-primary shrink-0" />
+                <span>
+                  <strong>Shared Invigilation Roster:</strong> Multiple faculty in this hall share this exact seating sequence. Any assigned professor can mark & submit attendance.
+                </span>
+              </div>
+              {hasUnsavedChanges ? (
+                <Badge variant="outline" className="bg-amber-500/10 text-amber-600 border-amber-300 text-[10px] shrink-0">
+                  Unsaved Changes
+                </Badge>
+              ) : lastSavedInfo?.at ? (
+                <span className="text-[10px] text-muted-foreground shrink-0">
+                  Saved by {lastSavedInfo.by || "Invigilator"} ({new Date(lastSavedInfo.at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })})
+                </span>
+              ) : null}
+            </div>
           </DialogHeader>
 
           {loadingStudents ? (
-            <div className="py-10 text-center">
-              <Loader2 className="size-6 animate-spin mx-auto text-primary" />
-              <p className="text-xs text-muted-foreground mt-2">Loading student allocations...</p>
+            <div className="py-20 text-center flex-1">
+              <Loader2 className="size-8 animate-spin mx-auto text-primary" />
+              <p className="text-xs text-muted-foreground mt-3 font-medium">Loading desk allocations & attendance...</p>
             </div>
           ) : roomStudents.length === 0 ? (
-            <div className="py-8 text-center text-sm text-muted-foreground">
-              No students allocated to this room yet. Seating plans can be generated from the Admin Seating Engine.
+            <div className="p-12 text-center text-sm text-muted-foreground flex-1">
+              No students allocated to this hall yet. Ensure a seating plan has been generated for this exam.
             </div>
           ) : (
-            <div className="space-y-4">
-              <div className="flex items-center justify-between text-xs bg-muted/40 p-2.5 rounded-lg border border-border">
-                <span>
-                  Total Seated: <strong>{roomStudents.length}</strong>
-                </span>
-                <span>
-                  Present:{" "}
-                  <strong className="text-emerald-600">
-                    {roomStudents.filter((s) => s.present).length}
-                  </strong>
-                </span>
-                <span>
-                  Absent:{" "}
-                  <strong className="text-destructive">
-                    {roomStudents.filter((s) => !s.present).length}
-                  </strong>
-                </span>
+            <div className="flex-1 flex flex-col overflow-hidden">
+              {/* Controls & Quick Actions */}
+              <div className="p-4 bg-muted/30 border-b border-border space-y-3">
+                <div className="flex flex-wrap items-center justify-between gap-3">
+                  {/* Attendance Stats */}
+                  <div className="flex items-center gap-2 text-xs">
+                    <span className="font-semibold text-foreground">
+                      Total: <strong className="font-mono">{roomStudents.length}</strong>
+                    </span>
+                    <span className="text-border">|</span>
+                    <span className="text-emerald-600 font-semibold flex items-center gap-1">
+                      <UserCheck className="size-3.5" /> Present:{" "}
+                      <strong className="font-mono">{roomStudents.filter((s) => s.present).length}</strong>
+                    </span>
+                    <span className="text-border">|</span>
+                    <span className="text-destructive font-semibold flex items-center gap-1">
+                      <UserX className="size-3.5" /> Absent:{" "}
+                      <strong className="font-mono">{roomStudents.filter((s) => !s.present).length}</strong>
+                    </span>
+                  </div>
+
+                  {/* Bulk Actions */}
+                  <div className="flex items-center gap-2">
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      className="h-7 text-xs gap-1 border-emerald-300 text-emerald-700 hover:bg-emerald-50 dark:border-emerald-800 dark:text-emerald-400"
+                      onClick={() => handleMarkAll(true)}
+                    >
+                      <CheckCheck className="size-3.5" /> Mark All Present
+                    </Button>
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      className="h-7 text-xs gap-1 border-rose-300 text-rose-700 hover:bg-rose-50 dark:border-rose-800 dark:text-rose-400"
+                      onClick={() => handleMarkAll(false)}
+                    >
+                      <UserX className="size-3.5" /> Mark All Absent
+                    </Button>
+                  </div>
+                </div>
+
+                {/* Search & Filter Bar */}
+                <div className="flex items-center gap-2">
+                  <div className="relative flex-1">
+                    <Search className="size-3.5 absolute left-2.5 top-2.5 text-muted-foreground" />
+                    <Input
+                      placeholder="Search student name, reg no, or seat (e.g. R1-S2)..."
+                      value={studentSearch}
+                      onChange={(e) => setStudentSearch(e.target.value)}
+                      className="h-8 pl-8 text-xs"
+                    />
+                  </div>
+                  <div className="flex items-center gap-1 bg-muted p-0.5 rounded-md border border-border text-xs">
+                    {(["all", "present", "absent"] as const).map((filter) => (
+                      <button
+                        key={filter}
+                        type="button"
+                        onClick={() => setAttendanceFilter(filter)}
+                        className={`px-2.5 py-1 rounded capitalize font-medium transition-colors ${
+                          attendanceFilter === filter
+                            ? "bg-background text-foreground shadow-xs"
+                            : "text-muted-foreground hover:text-foreground"
+                        }`}
+                      >
+                        {filter}
+                      </button>
+                    ))}
+                  </div>
+                </div>
               </div>
 
-              <div className="border border-border rounded-md overflow-hidden text-xs">
-                <table className="w-full text-left">
-                  <thead className="bg-muted border-b border-border font-semibold text-muted-foreground">
+              {/* Seating-wise Student List */}
+              <div className="flex-1 overflow-y-auto">
+                <table className="w-full text-left text-xs">
+                  <thead className="bg-muted/70 sticky top-0 border-b border-border font-semibold text-muted-foreground backdrop-blur-xs">
                     <tr>
-                      <th className="p-2.5 text-center">Seat</th>
+                      <th className="p-2.5 text-center w-24">Desk Seat</th>
                       <th className="p-2.5">Student Name</th>
                       <th className="p-2.5 font-mono">Reg No</th>
                       <th className="p-2.5 font-mono">Roll No</th>
-                      <th className="p-2.5 text-center">Attendance</th>
+                      <th className="p-2.5 text-center w-32">Attendance Status</th>
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-border">
-                    {roomStudents.map((st) => (
-                      <tr
-                        key={st.student_id}
-                        className={st.present ? "hover:bg-muted/30" : "bg-destructive/5"}
-                      >
-                        <td className="p-2.5 text-center font-bold">
-                          <span className="bg-muted px-2 py-0.5 rounded text-[11px]">
-                            R{st.row_number}-S{st.seat_number}
-                          </span>
-                        </td>
-                        <td className="p-2.5 font-medium text-foreground">{st.name}</td>
-                        <td className="p-2.5 font-mono">{st.registration_number}</td>
-                        <td className="p-2.5 font-mono text-muted-foreground">
-                          {st.roll_number || "—"}
-                        </td>
-                        <td className="p-2.5 text-center">
-                          <Button
-                            size="sm"
-                            variant={st.present ? "default" : "destructive"}
-                            className="h-7 text-xs px-2.5 gap-1"
-                            onClick={() => toggleAttendance(st.student_id)}
-                          >
-                            {st.present ? (
-                              <>
-                                <Check className="size-3" /> Present
-                              </>
-                            ) : (
-                              <>
-                                <X className="size-3" /> Absent
-                              </>
-                            )}
-                          </Button>
+                    {filteredStudents.length === 0 ? (
+                      <tr>
+                        <td colSpan={5} className="p-8 text-center text-muted-foreground">
+                          No students matched your search filter.
                         </td>
                       </tr>
-                    ))}
+                    ) : (
+                      filteredStudents.map((st) => (
+                        <tr
+                          key={st.student_id}
+                          className={`transition-colors ${
+                            st.present ? "hover:bg-muted/30" : "bg-destructive/5 hover:bg-destructive/10"
+                          }`}
+                        >
+                          <td className="p-2.5 text-center">
+                            <span className="font-mono font-bold bg-muted border border-border/80 px-2.5 py-1 rounded text-xs text-foreground">
+                              R{st.row_number}-S{st.seat_number}
+                            </span>
+                          </td>
+                          <td className="p-2.5 font-medium text-foreground">
+                            {st.name}
+                          </td>
+                          <td className="p-2.5 font-mono text-muted-foreground font-semibold">
+                            {st.registration_number}
+                          </td>
+                          <td className="p-2.5 font-mono text-muted-foreground">
+                            {st.roll_number || "—"}
+                          </td>
+                          <td className="p-2.5 text-center">
+                            <Button
+                              size="sm"
+                              variant={st.present ? "outline" : "destructive"}
+                              className={`h-7 text-xs px-3 gap-1.5 transition-all font-semibold ${
+                                st.present
+                                  ? "border-emerald-300 text-emerald-700 bg-emerald-500/10 hover:bg-emerald-500/20 dark:border-emerald-800 dark:text-emerald-400"
+                                  : "bg-destructive text-destructive-foreground hover:bg-destructive/90"
+                              }`}
+                              onClick={() => toggleAttendance(st.student_id)}
+                            >
+                              {st.present ? (
+                                <>
+                                  <Check className="size-3.5" /> Present
+                                </>
+                              ) : (
+                                <>
+                                  <X className="size-3.5" /> Absent
+                                </>
+                              )}
+                            </Button>
+                          </td>
+                        </tr>
+                      ))
+                    )}
                   </tbody>
                 </table>
+              </div>
+
+              {/* Footer */}
+              <div className="p-3 bg-muted/40 border-t border-border flex items-center justify-between text-xs">
+                <span className="text-muted-foreground">
+                  Showing <strong>{filteredStudents.length}</strong> of <strong>{roomStudents.length}</strong> students (Column-wise seating order)
+                </span>
+                <Button
+                  size="sm"
+                  onClick={handleSaveAttendance}
+                  disabled={savingAttendance || roomStudents.length === 0}
+                  className="gap-2 bg-emerald-600 hover:bg-emerald-700 text-white font-semibold"
+                >
+                  {savingAttendance ? (
+                    <Loader2 className="size-3.5 animate-spin" />
+                  ) : (
+                    <Save className="size-3.5" />
+                  )}
+                  Save Attendance
+                </Button>
               </div>
             </div>
           )}

@@ -14,6 +14,8 @@ import {
   Sparkles,
   Layers,
   ArrowRight,
+  UserCheck,
+  UserX,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -23,6 +25,10 @@ import { useAuth } from "@/lib/auth";
 import { UNIVERSITY_NAME } from "@/lib/db";
 import { StudentLayout, type StudentNavTab } from "@/components/layout/StudentLayout";
 import { GridBackdrop } from "@/components/effects/GridBackdrop";
+import {
+  getStudentAttendanceMap,
+  type AttendanceStatus,
+} from "@/lib/attendance";
 
 export const Route = createFileRoute("/_authenticated/student/portal")({
   head: () => ({
@@ -67,6 +73,9 @@ function StudentPortalPage() {
   const [student, setStudent] = useState<StudentProfile | null>(null);
   const [schedules, setSchedules] = useState<SeatSchedule[]>([]);
   const [subjects, setSubjects] = useState<StudentSubject[]>([]);
+  const [attendanceMap, setAttendanceMap] = useState<
+    Record<string, { status: AttendanceStatus; marked_at?: string; marked_by_name?: string }>
+  >({});
   const [loading, setLoading] = useState(true);
   const [activeTab, setActiveTab] = useState<StudentNavTab>("seating");
 
@@ -94,6 +103,10 @@ function StudentPortalPage() {
 
         if (studentRec) {
           setStudent(studentRec as any);
+
+          // Fetch attendance status for this student
+          const attMap = await getStudentAttendanceMap(studentRec.id);
+          setAttendanceMap(attMap);
 
           // 2. Fetch seating allocations for this student
           const { data: allocs } = await supabase
@@ -143,6 +156,26 @@ function StudentPortalPage() {
 
     void loadStudentData();
   }, [user]);
+
+  // Realtime attendance sync for student
+  useEffect(() => {
+    if (!student?.id) return;
+
+    // Listen to attendance updates across all student's exams
+    schedules.forEach((sch) => {
+      if (!sch.exam_id) return;
+      const channel = supabase.channel(`student-att-${sch.exam_id}`)
+        .on("broadcast", { event: "attendance_update" }, async () => {
+          const updated = await getStudentAttendanceMap(student.id);
+          setAttendanceMap(updated);
+        })
+        .subscribe();
+
+      return () => {
+        void supabase.removeChannel(channel);
+      };
+    });
+  }, [student?.id, schedules]);
 
   function handlePrint() {
     window.print();
@@ -283,79 +316,106 @@ function StudentPortalPage() {
             </div>
           ) : (
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-              {schedules.map((item, idx) => (
-                <div
-                  key={idx}
-                  className="panel group relative p-5 space-y-4 hover:border-primary/50 transition-all shadow-xs"
-                >
-                  <div className="flex items-start justify-between">
-                    <div>
-                      <Badge
-                        variant="secondary"
-                        className="mb-1 text-[10px] uppercase font-bold tracking-wider"
-                      >
-                        {item.session === "morning" ? "Morning Session" : "Evening Session"}
-                      </Badge>
-                      <h4 className="font-bold text-base text-foreground">{item.exam_name}</h4>
-                      <div className="flex items-center gap-3 text-xs text-muted-foreground mt-1">
-                        <span className="flex items-center gap-1 font-medium text-foreground">
-                          <Calendar className="size-3.5 text-primary" />
-                          {item.exam_date}
-                        </span>
-                        <span className="flex items-center gap-1">
-                          <Clock className="size-3.5 text-primary" />
-                          {item.session === "morning"
-                            ? "09:30 AM - 12:30 PM"
-                            : "01:30 PM - 04:30 PM"}
-                        </span>
+              {schedules.map((item, idx) => {
+                const att = attendanceMap[item.exam_id];
+                return (
+                  <div
+                    key={idx}
+                    className="panel group relative p-5 space-y-4 hover:border-primary/50 transition-all shadow-xs"
+                  >
+                    <div className="flex items-start justify-between gap-2">
+                      <div>
+                        <Badge
+                          variant="secondary"
+                          className="mb-1 text-[10px] uppercase font-bold tracking-wider"
+                        >
+                          {item.session === "morning" ? "Morning Session" : "Evening Session"}
+                        </Badge>
+                        <h4 className="font-bold text-base text-foreground">{item.exam_name}</h4>
+                        <div className="flex items-center gap-3 text-xs text-muted-foreground mt-1">
+                          <span className="flex items-center gap-1 font-medium text-foreground">
+                            <Calendar className="size-3.5 text-primary" />
+                            {item.exam_date}
+                          </span>
+                          <span className="flex items-center gap-1">
+                            <Clock className="size-3.5 text-primary" />
+                            {item.session === "morning"
+                              ? "09:30 AM - 12:30 PM"
+                              : "01:30 PM - 04:30 PM"}
+                          </span>
+                        </div>
+                      </div>
+
+                      {/* Live Attendance Status Badge */}
+                      <div className="text-right shrink-0">
+                        {att?.status === "present" ? (
+                          <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-bold bg-emerald-500/15 text-emerald-600 border border-emerald-300 dark:border-emerald-800">
+                            <CheckCircle2 className="size-3.5" /> Present
+                          </span>
+                        ) : att?.status === "absent" ? (
+                          <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-bold bg-rose-500/15 text-rose-600 border border-rose-300 dark:border-rose-800">
+                            <AlertCircle className="size-3.5" /> Absent
+                          </span>
+                        ) : (
+                          <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-medium bg-muted text-muted-foreground border border-border">
+                            <Clock className="size-3.5" /> Attendance Pending
+                          </span>
+                        )}
                       </div>
                     </div>
-                  </div>
 
-                  {/* Allocated Seat Highlight Box */}
-                  <div className="rounded-lg bg-primary/5 border border-primary/20 p-4 flex items-center justify-between">
-                    <div className="space-y-1">
-                      <span className="text-[11px] font-semibold text-muted-foreground uppercase tracking-wider flex items-center gap-1">
-                        <MapPin className="size-3 text-primary" /> Examination Hall
+                    {/* Allocated Seat Highlight Box */}
+                    <div className="rounded-lg bg-primary/5 border border-primary/20 p-4 flex items-center justify-between">
+                      <div className="space-y-1">
+                        <span className="text-[11px] font-semibold text-muted-foreground uppercase tracking-wider flex items-center gap-1">
+                          <MapPin className="size-3 text-primary" /> Examination Hall
+                        </span>
+                        <p className="text-xl font-bold text-foreground">
+                          {item.room_number}{" "}
+                          <span className="text-xs font-normal text-muted-foreground">
+                            ({item.block})
+                          </span>
+                        </p>
+                      </div>
+
+                      <div className="flex items-center gap-3 text-center">
+                        <div className="bg-card rounded-md px-3.5 py-2 border shadow-xs">
+                          <p className="text-[10px] text-muted-foreground uppercase font-semibold">
+                            Row
+                          </p>
+                          <p className="text-lg font-extrabold text-foreground">{item.row_number}</p>
+                        </div>
+                        <div className="bg-primary text-primary-foreground rounded-md px-4 py-2 shadow-xs">
+                          <p className="text-[10px] text-primary-foreground/80 uppercase font-semibold">
+                            Seat No
+                          </p>
+                          <p className="text-xl font-extrabold">{item.seat_number}</p>
+                        </div>
+                      </div>
+                    </div>
+
+                    <div className="flex items-center justify-between text-xs text-muted-foreground pt-1 border-t border-border">
+                      <span>
+                        Reporting Time:{" "}
+                        <strong className="text-foreground">
+                          {item.session === "morning" ? "09:00 AM" : "01:00 PM"}
+                        </strong>
                       </span>
-                      <p className="text-xl font-bold text-foreground">
-                        {item.room_number}{" "}
-                        <span className="text-xs font-normal text-muted-foreground">
-                          ({item.block})
+                      <div className="flex items-center gap-2">
+                        <span className="font-mono text-[11px] bg-muted px-2 py-0.5 rounded">
+                          Group: {item.group_label || "All"}
                         </span>
-                      </p>
-                    </div>
-
-                    <div className="flex items-center gap-3 text-center">
-                      <div className="bg-card rounded-md px-3.5 py-2 border shadow-xs">
-                        <p className="text-[10px] text-muted-foreground uppercase font-semibold">
-                          Row
-                        </p>
-                        <p className="text-lg font-extrabold text-foreground">{item.row_number}</p>
-                      </div>
-                      <div className="bg-primary text-primary-foreground rounded-md px-4 py-2 shadow-xs">
-                        <p className="text-[10px] text-primary-foreground/80 uppercase font-semibold">
-                          Seat No
-                        </p>
-                        <p className="text-xl font-extrabold">{item.seat_number}</p>
+                        {att?.marked_by_name && (
+                          <span className="text-[11px] text-muted-foreground hidden sm:inline">
+                            (Marked by {att.marked_by_name})
+                          </span>
+                        )}
                       </div>
                     </div>
+                    <span className="gold-rule absolute inset-x-0 bottom-0 h-0.5 opacity-0 transition-opacity group-hover:opacity-100" />
                   </div>
-
-                  <div className="flex items-center justify-between text-xs text-muted-foreground pt-1 border-t border-border">
-                    <span>
-                      Reporting Time:{" "}
-                      <strong className="text-foreground">
-                        {item.session === "morning" ? "09:00 AM" : "01:00 PM"}
-                      </strong>
-                    </span>
-                    <span className="font-mono text-[11px] bg-muted px-2 py-0.5 rounded">
-                      Group: {item.group_label || "All"}
-                    </span>
-                  </div>
-                  <span className="gold-rule absolute inset-x-0 bottom-0 h-0.5 opacity-0 transition-opacity group-hover:opacity-100" />
-                </div>
-              ))}
+                );
+              })}
             </div>
           )}
         </div>
@@ -442,28 +502,47 @@ function StudentPortalPage() {
                       <th className="p-2.5">Room</th>
                       <th className="p-2.5 text-center">Row</th>
                       <th className="p-2.5 text-center">Seat</th>
+                      <th className="p-2.5 text-center">Attendance</th>
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-border">
                     {schedules.length === 0 ? (
                       <tr>
-                        <td colSpan={6} className="p-4 text-center text-muted-foreground">
+                        <td colSpan={7} className="p-4 text-center text-muted-foreground">
                           No seating records generated yet.
                         </td>
                       </tr>
                     ) : (
-                      schedules.map((s, i) => (
-                        <tr key={i} className="hover:bg-muted/30">
-                          <td className="p-2.5 font-medium">{s.exam_date}</td>
-                          <td className="p-2.5 capitalize">{s.session}</td>
-                          <td className="p-2.5 font-semibold text-foreground">{s.exam_name}</td>
-                          <td className="p-2.5 font-bold text-primary">{s.room_number}</td>
-                          <td className="p-2.5 text-center">{s.row_number}</td>
-                          <td className="p-2.5 text-center font-bold text-base text-foreground">
-                            {s.seat_number}
-                          </td>
-                        </tr>
-                      ))
+                      schedules.map((s, i) => {
+                        const att = attendanceMap[s.exam_id];
+                        return (
+                          <tr key={i} className="hover:bg-muted/30">
+                            <td className="p-2.5 font-medium">{s.exam_date}</td>
+                            <td className="p-2.5 capitalize">{s.session}</td>
+                            <td className="p-2.5 font-semibold text-foreground">{s.exam_name}</td>
+                            <td className="p-2.5 font-bold text-primary">{s.room_number}</td>
+                            <td className="p-2.5 text-center">{s.row_number}</td>
+                            <td className="p-2.5 text-center font-bold text-base text-foreground">
+                              {s.seat_number}
+                            </td>
+                            <td className="p-2.5 text-center">
+                              {att?.status === "present" ? (
+                                <Badge className="bg-emerald-500/10 text-emerald-600 border-emerald-300 text-[10px] font-bold">
+                                  Present
+                                </Badge>
+                              ) : att?.status === "absent" ? (
+                                <Badge variant="destructive" className="text-[10px] font-bold">
+                                  Absent
+                                </Badge>
+                              ) : (
+                                <Badge variant="outline" className="text-muted-foreground text-[10px]">
+                                  Pending
+                                </Badge>
+                              )}
+                            </td>
+                          </tr>
+                        );
+                      })
                     )}
                   </tbody>
                 </table>
