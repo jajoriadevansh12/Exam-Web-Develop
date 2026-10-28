@@ -27,3 +27,8 @@ dist-ssr
 # Environment
 .env.local
 .env.*.local
+
+# Datasets & spreadsheets
+*.csv
+*.xlsx
+*.xls
