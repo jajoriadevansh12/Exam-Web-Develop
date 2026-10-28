@@ -263,10 +263,9 @@ function StudentPortalPage() {
             </div>
           </div>
 
-          <dl className="grid grid-cols-3 gap-3 text-right">
+          <dl className="grid grid-cols-2 gap-3 text-right">
             {[
               { label: "Scheduled", value: schedules.length },
-              { label: "Seat Allocated", value: schedules.length > 0 ? "YES" : "PENDING" },
               { label: "Subjects", value: subjects.length },
             ].map((item) => (
               <div key={item.label} className="rounded-lg bg-black/20 p-3 backdrop-blur-xs">
