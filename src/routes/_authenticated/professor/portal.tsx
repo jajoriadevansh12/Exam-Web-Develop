@@ -1,5 +1,5 @@
 import { createFileRoute } from "@tanstack/react-router";
-import { useEffect, useState } from "react";
+import { useEffect, useState, useCallback } from "react";
 import {
   Users,
   Calendar,
@@ -23,6 +23,7 @@ import {
   UserCheck,
   UserX,
   RotateCcw,
+  Bell,
 } from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
@@ -74,6 +75,8 @@ type InvigilationDuty = {
   room_number: string;
   block: string;
   capacity: number;
+  notified: boolean;
+  notified_at?: string | null;
 };
 
 type LeaveRequest = {
@@ -118,77 +121,108 @@ function ProfessorPortalPage() {
   const [leaveReason, setLeaveReason] = useState("");
   const [submittingLeave, setSubmittingLeave] = useState(false);
 
-  useEffect(() => {
-    async function loadProfessorData() {
-      if (!user) return;
-      setLoading(true);
-      try {
-        // 1. Fetch professor linked to user or fallback to first professor
-        let { data: profRec } = await supabase
+  const loadProfessorData = useCallback(async () => {
+    if (!user) return;
+    setLoading(true);
+    try {
+      // 1. Fetch professor linked to user or fallback to first professor
+      let { data: profRec } = await supabase
+        .from("professors")
+        .select("id, name, employee_id, department, email, phone, max_duties")
+        .eq("user_id", user.id)
+        .maybeSingle();
+
+      if (!profRec) {
+        const { data: firstProf } = await supabase
           .from("professors")
           .select("id, name, employee_id, department, email, phone, max_duties")
-          .eq("user_id", user.id)
+          .limit(1)
           .maybeSingle();
-
-        if (!profRec) {
-          const { data: firstProf } = await supabase
-            .from("professors")
-            .select("id, name, employee_id, department, email, phone, max_duties")
-            .limit(1)
-            .maybeSingle();
-          profRec = firstProf;
-        }
-
-        if (profRec) {
-          setProfessor(profRec as any);
-
-          // 2. Fetch assigned duties
-          const { data: dutyData } = await supabase
-            .from("professor_duties")
-            .select(`
-              id,
-              exam_id,
-              room_id,
-              room:rooms(id, room_number, block, capacity),
-              exam:exams(id, name, exam_date, session)
-            `)
-            .eq("professor_id", profRec.id);
-
-          if (dutyData) {
-            const formatted: InvigilationDuty[] = dutyData.map((d: any) => ({
-              id: d.id,
-              exam_id: d.exam?.id || "",
-              exam_name: d.exam?.name || "Examination",
-              exam_date: d.exam?.exam_date || "",
-              session: d.exam?.session || "morning",
-              room_id: d.room?.id || "",
-              room_number: d.room?.room_number || "TBA",
-              block: d.room?.block || "Main",
-              capacity: d.room?.capacity || 30,
-            }));
-            setDuties(formatted);
-          }
-
-          // 3. Fetch leaves
-          const { data: leaveData } = await supabase
-            .from("professor_leaves")
-            .select("id, leave_date, reason, approved, created_at")
-            .eq("professor_id", profRec.id)
-            .order("leave_date", { ascending: false });
-
-          if (leaveData) {
-            setLeaves(leaveData as LeaveRequest[]);
-          }
-        }
-      } catch (err) {
-        console.error("Error loading professor portal data:", err);
-      } finally {
-        setLoading(false);
+        profRec = firstProf;
       }
-    }
 
-    void loadProfessorData();
+      if (profRec) {
+        setProfessor(profRec as any);
+
+        // 2. Fetch assigned duties
+        const { data: dutyData } = await supabase
+          .from("professor_duties")
+          .select(`
+            id,
+            exam_id,
+            room_id,
+            notified,
+            notified_at,
+            room:rooms(id, room_number, block, capacity),
+            exam:exams(id, name, exam_date, session)
+          `)
+          .eq("professor_id", profRec.id);
+
+        if (dutyData) {
+          const formatted: InvigilationDuty[] = dutyData.map((d: any) => ({
+            id: d.id,
+            exam_id: d.exam?.id || "",
+            exam_name: d.exam?.name || "Examination",
+            exam_date: d.exam?.exam_date || "",
+            session: d.exam?.session || "morning",
+            room_id: d.room?.id || "",
+            room_number: d.room?.room_number || "TBA",
+            block: d.room?.block || "Main",
+            capacity: d.room?.capacity || 30,
+            notified: Boolean(d.notified),
+            notified_at: d.notified_at || null,
+          }));
+          setDuties(formatted);
+        }
+
+        // 3. Fetch leaves
+        const { data: leaveData } = await supabase
+          .from("professor_leaves")
+          .select("id, leave_date, reason, approved, created_at")
+          .eq("professor_id", profRec.id)
+          .order("leave_date", { ascending: false });
+
+        if (leaveData) {
+          setLeaves(leaveData as LeaveRequest[]);
+        }
+      }
+    } catch (err) {
+      console.error("Error loading professor portal data:", err);
+    } finally {
+      setLoading(false);
+    }
   }, [user]);
+
+  useEffect(() => {
+    void loadProfessorData();
+
+    // Listen to real-time notification broadcasts and duty updates
+    const channel = supabase
+      .channel("faculty-duty-notifications-listener")
+      .on("broadcast", { event: "duty-published" }, () => {
+        toast.info(
+          "🔔 Official Exam Duty Notification: New duty assignment published by Examination Branch!",
+          { duration: 8000 }
+        );
+        void loadProfessorData();
+      })
+      .on(
+        "postgres_changes",
+        {
+          event: "*",
+          schema: "public",
+          table: "professor_duties",
+        },
+        () => {
+          void loadProfessorData();
+        }
+      )
+      .subscribe();
+
+    return () => {
+      void supabase.removeChannel(channel);
+    };
+  }, [loadProfessorData]);
 
   // Open Room Students Sheet
   async function handleOpenRoomSheet(duty: InvigilationDuty) {
@@ -505,6 +539,11 @@ function ProfessorPortalPage() {
                 }
               >
                 <CalendarDays className="size-3.5 mr-1.5" /> Assigned Duties ({duties.length})
+                {duties.some((d) => d.notified) && (
+                  <span className="ml-1.5 inline-flex items-center rounded-full bg-gold px-1.5 py-0.2 text-[10px] font-bold text-black">
+                    {duties.filter((d) => d.notified).length} Notified
+                  </span>
+                )}
               </Button>
               <Button
                 size="sm"
@@ -535,8 +574,8 @@ function ProfessorPortalPage() {
 
           <dl className="grid grid-cols-3 gap-3 text-right">
             {[
-              { label: "Duties", value: `${duties.length} / ${professor?.max_duties || 10}` },
-              { label: "Duty Load", value: `${Math.round((duties.length / (professor?.max_duties || 10)) * 100)}%` },
+              { label: "Assigned Duties", value: `${duties.length} / ${professor?.max_duties || 10}` },
+              { label: "Notified Duties", value: `${duties.filter((d) => d.notified).length}` },
               { label: "Leaves", value: leaves.length },
             ].map((item) => (
               <div key={item.label} className="rounded-lg bg-black/20 p-3 backdrop-blur-xs">
@@ -567,6 +606,33 @@ function ProfessorPortalPage() {
             </div>
           </div>
 
+          {/* Official Duty Notification Alert Card */}
+          {duties.some((d) => d.notified) && (
+            <div className="rounded-xl border border-emerald-500/40 bg-gradient-to-r from-emerald-500/10 via-emerald-500/5 to-transparent p-4 flex items-start gap-3.5 shadow-xs">
+              <div className="rounded-lg bg-emerald-500/20 p-2 text-emerald-600 dark:text-emerald-400 shrink-0 mt-0.5">
+                <Bell className="size-5 animate-pulse" />
+              </div>
+              <div className="flex-1 space-y-1">
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <div className="flex items-center gap-2">
+                    <h4 className="font-bold text-sm text-foreground">
+                      Official Invigilation Duty Notification
+                    </h4>
+                    <Badge className="bg-emerald-600 text-white text-[11px] font-semibold px-2 py-0.5">
+                      {duties.filter((d) => d.notified).length} Duty Assignment{duties.filter((d) => d.notified).length > 1 ? "s" : ""} Confirmed
+                    </Badge>
+                  </div>
+                  <span className="text-[11px] font-medium text-emerald-700 dark:text-emerald-300">
+                    Published by Examination Branch
+                  </span>
+                </div>
+                <p className="text-xs text-muted-foreground">
+                  Your invigilation duty schedule and hall assignments have been officially published. Please review your assigned rooms, session timings, and report to the examination control room 30 minutes prior to session commencement.
+                </p>
+              </div>
+            </div>
+          )}
+
           {loading ? (
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
               <Skeleton className="h-44 w-full rounded-xl" />
@@ -589,12 +655,23 @@ function ProfessorPortalPage() {
                 >
                   <div className="flex items-start justify-between">
                     <div>
-                      <Badge
-                        variant="secondary"
-                        className="mb-1 text-[10px] uppercase font-bold tracking-wider"
-                      >
-                        {duty.session === "morning" ? "Morning Session" : "Evening Session"}
-                      </Badge>
+                      <div className="flex items-center gap-2 mb-1">
+                        <Badge
+                          variant="secondary"
+                          className="text-[10px] uppercase font-bold tracking-wider"
+                        >
+                          {duty.session === "morning" ? "Morning Session" : "Evening Session"}
+                        </Badge>
+                        {duty.notified ? (
+                          <Badge className="bg-emerald-500/15 text-emerald-600 dark:text-emerald-400 border border-emerald-500/30 text-[10px] font-semibold gap-1">
+                            <Bell className="size-3" /> Duty Notified
+                          </Badge>
+                        ) : (
+                          <Badge variant="outline" className="text-muted-foreground text-[10px] gap-1">
+                            <Clock className="size-3" /> Duty Pending
+                          </Badge>
+                        )}
+                      </div>
                       <h4 className="font-bold text-base text-foreground">{duty.exam_name}</h4>
                       <div className="flex items-center gap-3 text-xs text-muted-foreground mt-1">
                         <span className="flex items-center gap-1 font-medium text-foreground">

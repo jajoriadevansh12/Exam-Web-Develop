@@ -3,7 +3,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useMemo, useState } from "react";
 import {
   AlertTriangle, Download, FileSpreadsheet, Loader2, Plus,
-  Printer, Trash2, Wand2, Mail, Users, ArrowRightLeft,
+  Printer, Trash2, Wand2, Bell, Users, ArrowRightLeft,
   Sparkles, Search, Building2, CheckCircle2,
   BookOpen, RotateCcw, SlidersHorizontal, Check, X,
 } from "lucide-react";
@@ -34,7 +34,7 @@ import { buildRoomGrid } from "@/lib/seating-algorithm.js";
 import { buildMultiSubjectPrintHtml } from "@/lib/quick-seating";
 import { exportSeatingWorkbook } from "@/lib/seating-export";
 import { autoAssignProfessors, listDuties, removeDuty } from "@/lib/professors";
-import { sendBulkDutySummary } from "@/lib/email";
+import { supabase } from "@/integrations/supabase/client";
 import { RoomImportDialog } from "@/components/rooms/RoomImportDialog";
 
 export const Route = createFileRoute("/_authenticated/exams/seating")({
@@ -185,9 +185,7 @@ function SeatingPage() {
   const [professorsPerRoom, setProfessorsPerRoom] = useState("1");
   const [preview, setPreview] = useState(null);
   const [shortfallOpen, setShortfallOpen] = useState(false);
-  const [quickRoom, setQuickRoom] = useState({ block: "Main", room_number: "", row_count: 6, seats_per_row: 6 });
-  const [sendingEmail, setSendingEmail] = useState(false);
-  const [emailResults, setEmailResults] = useState(null);
+  const [notifyingFaculty, setNotifyingFaculty] = useState(false);
 
   const { data: rooms = [], isLoading: roomsLoading } = useQuery({ queryKey: ["rooms"], queryFn: listRooms });
   const { data: duties = [] } = useQuery({
@@ -471,28 +469,53 @@ function SeatingPage() {
     onSuccess: () => qc.invalidateQueries({ queryKey: ["duties", examId] }),
   });
 
-  async function sendEmailsToAll() {
-    setSendingEmail(true);
-    setEmailResults(null);
+  async function notifyFaculty() {
+    if (duties.length === 0) {
+      toast.error("No duties assigned to notify");
+      return;
+    }
+    setNotifyingFaculty(true);
     try {
-      const payload = duties.map((d) => ({
-        professorEmail: d.professors?.email ?? "",
-        professorName: d.professors?.name ?? "",
-        duties: [{
-          exam_date: d.exams?.exam_date || selectedDate,
-          session: d.exams?.session || selectedSession,
-          room: d.rooms ? `${d.rooms.block}/${d.rooms.room_number}` : "—",
-          exam_name: d.exams?.name || scheduledSubjects.join(", "),
-        }],
-      }));
-      const results = await sendBulkDutySummary(payload, `${categoryName} Examination`, UNIVERSITY_NAME);
-      setEmailResults(results);
-      const ok = results.filter((r) => r.ok).length;
-      toast.success(`Emails sent: ${ok}/${results.length}`);
+      const dutyIds = duties.map((d) => d.id);
+      const now = new Date().toISOString();
+
+      const { error } = await supabase
+        .from("professor_duties")
+        .update({
+          notified: true,
+          notified_at: now,
+        })
+        .in("id", dutyIds);
+
+      if (error) throw error;
+
+      // Broadcast real-time event to active professor portal sessions
+      try {
+        const channel = supabase.channel("faculty-duty-notifications");
+        await channel.send({
+          type: "broadcast",
+          event: "duty-published",
+          payload: {
+            examId,
+            examName: scheduledSubjects.join(", ") || `${categoryName} Examination`,
+            date: selectedDate,
+            session: selectedSession,
+            timestamp: now,
+            dutyCount: dutyIds.length,
+          },
+        });
+      } catch (broadcastErr) {
+        console.warn("Realtime broadcast notice warning:", broadcastErr);
+      }
+
+      await qc.invalidateQueries({ queryKey: ["duties", examId] });
+      toast.success(
+        `Duty notifications sent to ${dutyIds.length} faculty member(s)! Displayed on professor portal dashboard.`,
+      );
     } catch (err) {
-      toast.error("Email dispatch failed: " + err.message);
+      toast.error("Failed to send duty notifications: " + err.message);
     } finally {
-      setSendingEmail(false);
+      setNotifyingFaculty(false);
     }
   }
 
@@ -506,7 +529,7 @@ function SeatingPage() {
       "Date": d.exams?.exam_date ?? selectedDate,
       "Session": d.exams?.session ?? selectedSession,
       "Room": d.rooms ? `${d.rooms.block} / ${d.rooms.room_number}` : "—",
-      "Notified": d.notified ? "Yes" : "No",
+      "Dashboard Notified": d.notified ? "Yes" : "No",
     }));
     const ws = XLSX.utils.json_to_sheet(rows);
     ws["!cols"] = [{ wch: 14 }, { wch: 24 }, { wch: 28 }, { wch: 32 }, { wch: 12 }, { wch: 12 }, { wch: 14 }, { wch: 10 }];
@@ -1568,20 +1591,42 @@ function SeatingPage() {
                     <FileSpreadsheet className="size-3.5" /> Export Sheet
                   </Button>
 
-                  <Button size="sm" onClick={sendEmailsToAll} disabled={duties.length === 0 || sendingEmail} className="h-8 text-xs gap-1.5">
-                    {sendingEmail ? <Loader2 className="size-3.5 animate-spin" /> : <Mail className="size-3.5" />}
-                    Email Faculty
+                  <Button
+                    size="sm"
+                    onClick={notifyFaculty}
+                    disabled={duties.length === 0 || notifyingFaculty}
+                    className="h-8 text-xs gap-1.5 bg-emerald-600 hover:bg-emerald-700 text-white"
+                  >
+                    {notifyingFaculty ? <Loader2 className="size-3.5 animate-spin" /> : <Bell className="size-3.5" />}
+                    Send Duty Notification
                   </Button>
                 </div>
               </div>
 
-              {emailResults && (
-                <div className="p-3 rounded-lg border border-border bg-muted/20 text-xs flex flex-wrap gap-2">
-                  {emailResults.map((r, i) => (
-                    <span key={i} className={r.ok ? "text-emerald-700" : "text-destructive"}>
-                      {r.email}: {r.ok ? "✓ sent" : `✗ ${r.error}`}
+              {/* Status summary banner */}
+              {duties.length > 0 && (
+                <div className="p-3 rounded-lg border border-border bg-muted/20 text-xs flex flex-wrap items-center justify-between gap-2">
+                  <div className="flex items-center gap-2">
+                    <span className="font-semibold text-foreground">
+                      {duties.length} Invigilator(s) Assigned
                     </span>
-                  ))}
+                    <span className="text-muted-foreground">•</span>
+                    <span className="text-emerald-700 dark:text-emerald-400 font-medium flex items-center gap-1">
+                      <Check className="size-3" />
+                      {duties.filter((d) => d.notified).length} Notified on Dashboard
+                    </span>
+                    {duties.some((d) => !d.notified) && (
+                      <>
+                        <span className="text-muted-foreground">•</span>
+                        <span className="text-amber-600 dark:text-amber-400 font-medium">
+                          {duties.filter((d) => !d.notified).length} Pending Notification
+                        </span>
+                      </>
+                    )}
+                  </div>
+                  <span className="text-muted-foreground text-[11px]">
+                    Notifications appear directly on faculty dashboards in the Professor Portal
+                  </span>
                 </div>
               )}
 
@@ -1624,8 +1669,15 @@ function SeatingPage() {
                             </Badge>
                           </td>
                           <td className="px-4 py-2.5 text-center">
-                            <Badge variant={d.notified ? "default" : "outline"} className="text-[11px]">
-                              {d.notified ? "✓ Notified" : "Pending Email"}
+                            <Badge
+                              variant={d.notified ? "default" : "outline"}
+                              className={
+                                d.notified
+                                  ? "bg-emerald-600 text-white hover:bg-emerald-600 text-[11px]"
+                                  : "text-muted-foreground text-[11px]"
+                              }
+                            >
+                              {d.notified ? "✓ Notified on Dashboard" : "Pending Notification"}
                             </Badge>
                           </td>
                           <td className="px-4 py-2.5 text-right">
