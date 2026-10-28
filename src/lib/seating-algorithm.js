@@ -266,12 +266,13 @@ export function buildSeatingPlan(groups, rooms, strategy = "alternate", options 
   const getBatchKey = (q) => q.batch_id || `${q.course_id || q.course_code || ""}_${q.batch_name || getGroupYear(q) || ""}`;
   const distinctBatchesCount = new Set(queues.map(getBatchKey)).size;
 
-  // STRICT RULE: Alternation is NEVER allowed with the same batch!
-  // If only 1 batch is present, alternate seating is impossible.
-  let isAlternate = (strategy === "alternate" || strategy === "alternate_rows" || strategy === "alternate_columns");
-  if (isAlternate && distinctBatchesCount < 2) {
-    isAlternate = false;
-  }
+  // Seating strategy resolution:
+  // - Multi-batch alternate (2+ batches): Alternates between distinct batches in columns (TC05)
+  // - Single-batch alternate (1 batch): Alternates with empty buffer desks (Desk 1, 3, 5...) (TC06)
+  const wantsAlternate = (strategy === "alternate" || strategy === "alternate_rows" || strategy === "alternate_columns");
+  const isMultiBatchAlternate = wantsAlternate && distinctBatchesCount >= 2;
+  const isSingleBatchAlternate = wantsAlternate && distinctBatchesCount < 2;
+  let isAlternate = isMultiBatchAlternate;
 
   // Sort rooms by total capacity descending (biggest room first)
   const usableRooms = [...rooms]
@@ -281,14 +282,23 @@ export function buildSeatingPlan(groups, rooms, strategy = "alternate", options 
   const totalStudents = queues.reduce((s, q) => s + q.items.length, 0);
 
   // In simple mode, sort queues by strength descending so biggest class gets biggest room
-  if (!isAlternate) {
+  if (!wantsAlternate) {
     queues.sort((a, b) => b.items.length - a.items.length);
   }
 
+  // Effective capacity in single-batch alternate mode is half the desks (empty buffer desks on alternates)
+  const effectiveRooms = isSingleBatchAlternate
+    ? usableRooms.map((r) => ({
+        ...r,
+        row_count: 1,
+        seats_per_row: Math.ceil((r.row_count * r.seats_per_row) / 2),
+      }))
+    : usableRooms;
+
   const fillMode = options.fillMode || "pack_rooms";
   const roomTargets = fillMode === "balanced"
-    ? balanceRooms(usableRooms, totalStudents)
-    : packRooms(usableRooms, totalStudents);
+    ? balanceRooms(effectiveRooms, totalStudents)
+    : packRooms(effectiveRooms, totalStudents);
 
   const planned = [];
   let adjacentConflicts = 0;
@@ -471,6 +481,43 @@ export function buildSeatingPlan(groups, rooms, strategy = "alternate", options 
             group_label: found.label,
             student,
             students: student,
+          });
+        }
+      }
+    } else if (isSingleBatchAlternate) {
+      // --- TC06: Single Batch Alternate Seating with Empty Buffer Desks ---
+      // When a single batch is selected with alternate strategy, students are placed
+      // on alternate desks (Desk 1, 3, 5...) leaving empty buffer seats between them.
+      for (let col = 0; col < room.seats_per_row; col++) {
+        if (seats.length >= target) break;
+
+        for (let row = 0; row < room.row_count; row++) {
+          if (seats.length >= target) break;
+
+          // Alternate desk condition: checkerboard pattern ((row + col) % 2 === 0)
+          // Leaves empty buffer desks between all adjacent students (Desk 1, 3, 5...)
+          if ((row + col) % 2 !== 0) {
+            // Empty buffer desk (vacant)
+            continue;
+          }
+
+          const remaining = queues.filter((q) => q.items.length > 0);
+          if (remaining.length === 0) break;
+
+          const picked = remaining[0];
+          const student = picked.items.shift();
+          if (!student) continue;
+
+          grid[row][col] = picked.label;
+          seats.push({
+            room_id: room.id,
+            student_id: student.id,
+            row_number: row + 1,
+            seat_number: col + 1,
+            group_label: picked.label,
+            student,
+            students: student,
+            isBufferDesk: false,
           });
         }
       }
