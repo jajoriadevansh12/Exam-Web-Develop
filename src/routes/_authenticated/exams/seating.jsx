@@ -6,6 +6,7 @@ import {
   Printer, Trash2, Wand2, Bell, Users, ArrowRightLeft,
   Sparkles, Search, Building2, CheckCircle2,
   BookOpen, RotateCcw, SlidersHorizontal, Check, X,
+  Calendar, Clock, Shuffle,
 } from "lucide-react";
 import { toast } from "sonner";
 import * as XLSX from "xlsx";
