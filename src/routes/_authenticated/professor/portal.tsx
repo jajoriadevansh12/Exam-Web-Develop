@@ -125,12 +125,21 @@ function ProfessorPortalPage() {
     if (!user) return;
     setLoading(true);
     try {
-      // 1. Fetch professor linked to user or fallback to first professor
+      // 1. Fetch professor linked to user or fallback by email or first professor
       let { data: profRec } = await supabase
         .from("professors")
         .select("id, name, employee_id, department, email, phone, max_duties")
         .eq("user_id", user.id)
         .maybeSingle();
+
+      if (!profRec && user.email) {
+        const { data: profByEmail } = await supabase
+          .from("professors")
+          .select("id, name, employee_id, department, email, phone, max_duties")
+          .ilike("email", user.email)
+          .maybeSingle();
+        profRec = profByEmail;
+      }
 
       if (!profRec) {
         const { data: firstProf } = await supabase
@@ -198,7 +207,7 @@ function ProfessorPortalPage() {
 
     // Listen to real-time notification broadcasts and duty updates
     const channel = supabase
-      .channel("faculty-duty-notifications-listener")
+      .channel("faculty-duty-notifications")
       .on("broadcast", { event: "duty-published" }, () => {
         toast.info(
           "🔔 Official Exam Duty Notification: New duty assignment published by Examination Branch!",
@@ -214,6 +223,24 @@ function ProfessorPortalPage() {
           table: "professor_duties",
         },
         () => {
+          void loadProfessorData();
+        }
+      )
+      .on(
+        "postgres_changes",
+        {
+          event: "*",
+          schema: "public",
+          table: "professor_leaves",
+        },
+        (payload: any) => {
+          if (payload.eventType === "UPDATE") {
+            if (payload.new?.approved) {
+              toast.success(`✅ Official Notice: Your leave request for ${payload.new.leave_date} has been APPROVED!`, { duration: 9000 });
+            } else if (payload.new?.reason?.startsWith("[REJECTED]")) {
+              toast.error(`❌ Official Notice: Your leave request for ${payload.new.leave_date} was REJECTED by Examination Office.`, { duration: 9000 });
+            }
+          }
           void loadProfessorData();
         }
       )
@@ -435,9 +462,12 @@ function ProfessorPortalPage() {
   // Handle Apply Leave
   async function handleApplyLeave(e: React.FormEvent) {
     e.preventDefault();
-    if (!professor) return;
+    if (!professor) {
+      toast.error("Professor profile not loaded yet. Please wait a moment or re-login.");
+      return;
+    }
     if (!leaveDate) {
-      toast.error("Please select a date");
+      toast.error("Please select a date for your leave request");
       return;
     }
 
@@ -456,7 +486,24 @@ function ProfessorPortalPage() {
 
       if (error) throw error;
 
-      toast.success("Leave request submitted to Examination Office");
+      // Broadcast to admin notifications channel so admin is alerted instantly
+      try {
+        const adminChan = supabase.channel("exam-suite-admin-notifications-center");
+        await adminChan.send({
+          type: "broadcast",
+          event: "new-leave-request",
+          payload: {
+            professor_name: professor.name,
+            employee_id: professor.employee_id,
+            leave_date: leaveDate,
+            reason: leaveReason.trim() || null,
+          },
+        });
+      } catch (bcErr) {
+        console.warn("Notice broadcast warning:", bcErr);
+      }
+
+      toast.success("Leave request submitted to Examination Office! Awaiting Admin approval.");
       setLeaves((prev) => [data as LeaveRequest, ...prev]);
       setLeaveDate("");
       setLeaveReason("");
@@ -485,16 +532,33 @@ function ProfessorPortalPage() {
     return matchesSearch && matchesFilter;
   });
 
-  const notifications = duties
-    .filter((d) => d.notified)
-    .map((d) => ({
-      id: d.id,
-      title: `Invigilation: ${d.exam_name}`,
-      room: `Hall ${d.room_number} (${d.block})`,
-      session: d.session === "morning" ? "Morning Session (09:30 AM)" : "Evening Session (01:30 PM)",
-      date: d.exam_date,
-      notifiedAt: d.notified_at,
-    }));
+  const dutyNotifications = duties.map((d) => ({
+    id: d.id,
+    title: `Invigilation: ${d.exam_name}`,
+    room: `Hall ${d.room_number} (${d.block})`,
+    session: d.session === "morning" ? "Morning Session (09:30 AM)" : "Evening Session (01:30 PM)",
+    date: d.exam_date,
+    notifiedAt: d.notified_at,
+  }));
+
+  const leaveNotifications = leaves.map((l) => {
+    const isApproved = l.approved;
+    const isRejected = l.reason?.startsWith("[REJECTED]");
+    return {
+      id: `leave-${l.id}`,
+      title: isApproved
+        ? `✅ Leave Approved: ${l.leave_date}`
+        : isRejected
+        ? `❌ Leave Rejected: ${l.leave_date}`
+        : `⏳ Leave Pending: ${l.leave_date}`,
+      room: isApproved ? "Approved by Admin" : isRejected ? "Rejected by Admin" : "Awaiting Review",
+      session: l.reason?.replace("[REJECTED] ", "") || "Leave Request",
+      date: l.leave_date,
+      notifiedAt: l.created_at,
+    };
+  });
+
+  const notifications = [...dutyNotifications, ...leaveNotifications];
 
   return (
     <ProfessorLayout
@@ -503,7 +567,13 @@ function ProfessorPortalPage() {
       activeTab={activeTab}
       onTabChange={setActiveTab}
       notifications={notifications}
-      onNotificationClick={() => setActiveTab("duties")}
+      onNotificationClick={(n) => {
+        if (n.id.startsWith("leave-")) {
+          setActiveTab("leaves");
+        } else {
+          setActiveTab("duties");
+        }
+      }}
       professorInfo={{
         name: professor?.name,
         employeeId: professor?.employee_id,

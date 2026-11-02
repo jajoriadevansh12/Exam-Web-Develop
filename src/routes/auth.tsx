@@ -154,53 +154,75 @@ function AuthPage() {
           </div>
 
           {/* Quick 1-Click Instant Sign-In */}
-          <div className="mb-5 rounded-xl border border-primary/20 bg-primary/5 p-3.5">
-            <div className="flex items-center justify-between mb-2.5">
+          <div className="mb-5 rounded-xl border border-primary/20 bg-primary/5 p-3.5 space-y-2.5">
+            <div className="flex items-center justify-between">
               <p className="text-xs font-semibold text-foreground flex items-center gap-1.5">
-                ⚡ 1-Click Instant Demo Login:
+                ⚡ 1-Click Instant Login:
               </p>
-              <span className="text-[10px] text-muted-foreground font-mono">1 click = auto sign in</span>
+              <span className="text-[10px] text-muted-foreground font-mono">Click any role to enter</span>
             </div>
-            <div className="grid grid-cols-3 gap-2">
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
               <button
                 type="button"
                 disabled={busy}
                 onClick={() => void loginWithCredentials("admin@exam.com", "Admin@123456", "Admin")}
-                className="group relative flex items-center justify-center gap-1.5 rounded-lg border border-border bg-card px-2.5 py-2 text-xs font-medium text-foreground hover:border-primary hover:bg-primary/10 transition-all duration-200 text-center cursor-pointer shadow-xs disabled:opacity-50"
+                className="group relative flex flex-col items-center justify-center gap-1 rounded-lg border border-border bg-card p-2 text-xs font-medium text-foreground hover:border-primary hover:bg-primary/10 transition-all duration-200 text-center cursor-pointer shadow-xs disabled:opacity-50"
               >
-                {oneClickTarget === "Admin" ? (
-                  <Loader2 className="size-3.5 animate-spin text-primary" />
-                ) : (
-                  <span>🛡️</span>
-                )}
-                <span>Admin</span>
+                <div className="flex items-center gap-1.5 font-semibold text-foreground">
+                  {oneClickTarget === "Admin" ? (
+                    <Loader2 className="size-3.5 animate-spin text-primary" />
+                  ) : (
+                    <span>🛡️</span>
+                  )}
+                  <span>Admin</span>
+                </div>
+                <span className="text-[10px] text-muted-foreground font-mono truncate max-w-full">
+                  admin@exam.com
+                </span>
               </button>
+
               <button
                 type="button"
                 disabled={busy}
                 onClick={() => void loginWithCredentials("prof@exam.com", "Prof@123456", "Professor")}
-                className="group relative flex items-center justify-center gap-1.5 rounded-lg border border-border bg-card px-2.5 py-2 text-xs font-medium text-foreground hover:border-primary hover:bg-primary/10 transition-all duration-200 text-center cursor-pointer shadow-xs disabled:opacity-50"
+                className="group relative flex flex-col items-center justify-center gap-1 rounded-lg border border-emerald-500/30 bg-emerald-500/5 p-2 text-xs font-medium text-foreground hover:border-emerald-500 hover:bg-emerald-500/10 transition-all duration-200 text-center cursor-pointer shadow-xs disabled:opacity-50"
               >
-                {oneClickTarget === "Professor" ? (
-                  <Loader2 className="size-3.5 animate-spin text-primary" />
-                ) : (
-                  <span>👨‍🏫</span>
-                )}
-                <span>Professor</span>
+                <div className="flex items-center gap-1.5 font-semibold text-foreground">
+                  {oneClickTarget === "Professor" ? (
+                    <Loader2 className="size-3.5 animate-spin text-emerald-600" />
+                  ) : (
+                    <span>👨‍🏫</span>
+                  )}
+                  <span>Rajesh Sir</span>
+                </div>
+                <span className="text-[10px] text-muted-foreground font-mono truncate max-w-full">
+                  prof@exam.com
+                </span>
               </button>
+
               <button
                 type="button"
                 disabled={busy}
                 onClick={() => void loginWithCredentials("student@exam.com", "Student@123456", "Student")}
-                className="group relative flex items-center justify-center gap-1.5 rounded-lg border border-border bg-card px-2.5 py-2 text-xs font-medium text-foreground hover:border-primary hover:bg-primary/10 transition-all duration-200 text-center cursor-pointer shadow-xs disabled:opacity-50"
+                className="group relative flex flex-col items-center justify-center gap-1 rounded-lg border border-border bg-card p-2 text-xs font-medium text-foreground hover:border-primary hover:bg-primary/10 transition-all duration-200 text-center cursor-pointer shadow-xs disabled:opacity-50"
               >
-                {oneClickTarget === "Student" ? (
-                  <Loader2 className="size-3.5 animate-spin text-primary" />
-                ) : (
-                  <span>🎓</span>
-                )}
-                <span>Student</span>
+                <div className="flex items-center gap-1.5 font-semibold text-foreground">
+                  {oneClickTarget === "Student" ? (
+                    <Loader2 className="size-3.5 animate-spin text-primary" />
+                  ) : (
+                    <span>🎓</span>
+                  )}
+                  <span>Student</span>
+                </div>
+                <span className="text-[10px] text-muted-foreground font-mono truncate max-w-full">
+                  student@exam.com
+                </span>
               </button>
+            </div>
+
+            <div className="rounded-lg bg-card/60 p-2 border border-border/60 text-[11px] text-muted-foreground">
+              <span className="font-semibold text-foreground">Default Password for all:</span>{" "}
+              <code className="text-primary font-mono font-semibold">Admin@123456</code> / <code className="text-emerald-600 font-mono font-semibold">Prof@123456</code>
             </div>
           </div>
 

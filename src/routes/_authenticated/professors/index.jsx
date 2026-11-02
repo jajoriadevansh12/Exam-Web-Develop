@@ -51,7 +51,14 @@ function getCleanReason(reason) {
 
 function ProfessorsPage() {
   const qc = useQueryClient();
-  const [tab, setTab] = useState("list"); // "list" | "duties" | "leaves" | "import"
+  const [tab, setTab] = useState(() => {
+    if (typeof window !== "undefined") {
+      const sp = new URLSearchParams(window.location.search);
+      const t = sp.get("tab");
+      if (t && ["list", "duties", "leaves", "import"].includes(t)) return t;
+    }
+    return "list";
+  }); // "list" | "duties" | "leaves" | "import"
   const [open, setOpen] = useState(false);
   const [editing, setEditing] = useState(null);
   const [form, setForm] = useState(EMPTY_FORM);
