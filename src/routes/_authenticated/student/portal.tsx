@@ -91,7 +91,19 @@ function StudentPortalPage() {
           .eq("user_id", user.id)
           .maybeSingle();
 
-        // Fallback for demo login if unlinked
+        // 2. Fallback: match by student email if user_id was not linked yet
+        if (!studentRec && user.email) {
+          const { data: studentByEmail } = await supabase
+            .from("students")
+            .select("id, name, registration_number, roll_number, status, course:courses(name, code), batch:batches(name), section:sections(name)")
+            .ilike("email", user.email)
+            .maybeSingle();
+          if (studentByEmail) {
+            studentRec = studentByEmail;
+          }
+        }
+
+        // 3. Fallback for demo student account
         if (!studentRec) {
           const { data: firstStudent } = await supabase
             .from("students")
