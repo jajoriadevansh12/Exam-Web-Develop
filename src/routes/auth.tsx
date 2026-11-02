@@ -54,9 +54,43 @@ function AuthPage() {
     }
   }, [loading, session, role, navigate]);
 
-  function fillDemo(demoEmail: string, demoPass: string) {
-    setEmail(demoEmail);
-    setPassword(demoPass);
+  const [oneClickTarget, setOneClickTarget] = useState<string | null>(null);
+
+  async function loginWithCredentials(targetEmail: string, targetPass: string, roleName: string) {
+    setEmail(targetEmail);
+    setPassword(targetPass);
+    setBusy(true);
+    setOneClickTarget(roleName);
+    try {
+      const { data: authData, error } = await supabase.auth.signInWithPassword({
+        email: targetEmail,
+        password: targetPass,
+      });
+      if (error) throw error;
+      
+      // Determine role for instant redirect
+      const { data: roleData } = await supabase
+        .from("user_roles")
+        .select("role")
+        .eq("user_id", authData.user.id)
+        .maybeSingle();
+
+      const userRole = roleData?.role;
+      toast.success(`Signed in as ${roleName.toUpperCase()}`);
+
+      if (userRole === "student") {
+        await navigate({ to: "/student/portal" as any, replace: true });
+      } else if (userRole === "professor") {
+        await navigate({ to: "/professor/portal" as any, replace: true });
+      } else {
+        await navigate({ to: "/dashboard", replace: true });
+      }
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "Authentication failed");
+    } finally {
+      setBusy(false);
+      setOneClickTarget(null);
+    }
   }
 
   async function handleSubmit(event: React.FormEvent) {
@@ -119,30 +153,53 @@ function AuthPage() {
             </p>
           </div>
 
-          {/* Quick Demo Credentials */}
-          <div className="mb-5 rounded-xl border border-border bg-secondary/50 p-3">
-            <p className="text-xs font-semibold text-foreground mb-2">⚡ Quick 1-Click Demo Accounts:</p>
-            <div className="grid grid-cols-3 gap-1.5">
+          {/* Quick 1-Click Instant Sign-In */}
+          <div className="mb-5 rounded-xl border border-primary/20 bg-primary/5 p-3.5">
+            <div className="flex items-center justify-between mb-2.5">
+              <p className="text-xs font-semibold text-foreground flex items-center gap-1.5">
+                ⚡ 1-Click Instant Demo Login:
+              </p>
+              <span className="text-[10px] text-muted-foreground font-mono">1 click = auto sign in</span>
+            </div>
+            <div className="grid grid-cols-3 gap-2">
               <button
                 type="button"
-                onClick={() => fillDemo("admin@exam.com", "Admin@123456")}
-                className="rounded-full border border-border bg-card px-2.5 py-1.5 text-xs font-medium text-foreground hover:border-primary hover:bg-accent transition-all duration-200 text-center cursor-pointer shadow-xs"
+                disabled={busy}
+                onClick={() => void loginWithCredentials("admin@exam.com", "Admin@123456", "Admin")}
+                className="group relative flex items-center justify-center gap-1.5 rounded-lg border border-border bg-card px-2.5 py-2 text-xs font-medium text-foreground hover:border-primary hover:bg-primary/10 transition-all duration-200 text-center cursor-pointer shadow-xs disabled:opacity-50"
               >
-                🛡️ Admin
+                {oneClickTarget === "Admin" ? (
+                  <Loader2 className="size-3.5 animate-spin text-primary" />
+                ) : (
+                  <span>🛡️</span>
+                )}
+                <span>Admin</span>
               </button>
               <button
                 type="button"
-                onClick={() => fillDemo("prof@exam.com", "Prof@123456")}
-                className="rounded-full border border-border bg-card px-2.5 py-1.5 text-xs font-medium text-foreground hover:border-primary hover:bg-accent transition-all duration-200 text-center cursor-pointer shadow-xs"
+                disabled={busy}
+                onClick={() => void loginWithCredentials("prof@exam.com", "Prof@123456", "Professor")}
+                className="group relative flex items-center justify-center gap-1.5 rounded-lg border border-border bg-card px-2.5 py-2 text-xs font-medium text-foreground hover:border-primary hover:bg-primary/10 transition-all duration-200 text-center cursor-pointer shadow-xs disabled:opacity-50"
               >
-                👨‍🏫 Professor
+                {oneClickTarget === "Professor" ? (
+                  <Loader2 className="size-3.5 animate-spin text-primary" />
+                ) : (
+                  <span>👨‍🏫</span>
+                )}
+                <span>Professor</span>
               </button>
               <button
                 type="button"
-                onClick={() => fillDemo("student@exam.com", "Student@123456")}
-                className="rounded-full border border-border bg-card px-2.5 py-1.5 text-xs font-medium text-foreground hover:border-primary hover:bg-accent transition-all duration-200 text-center cursor-pointer shadow-xs"
+                disabled={busy}
+                onClick={() => void loginWithCredentials("student@exam.com", "Student@123456", "Student")}
+                className="group relative flex items-center justify-center gap-1.5 rounded-lg border border-border bg-card px-2.5 py-2 text-xs font-medium text-foreground hover:border-primary hover:bg-primary/10 transition-all duration-200 text-center cursor-pointer shadow-xs disabled:opacity-50"
               >
-                🎓 Student
+                {oneClickTarget === "Student" ? (
+                  <Loader2 className="size-3.5 animate-spin text-primary" />
+                ) : (
+                  <span>🎓</span>
+                )}
+                <span>Student</span>
               </button>
             </div>
           </div>
