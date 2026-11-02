@@ -30,7 +30,7 @@ import {
   saveSeatingPlanForDate,
   listExamsDetailed,
 } from "@/lib/seating";
-import { buildRoomGrid } from "@/lib/seating-algorithm.js";
+import { buildRoomGrid, matchesBatchOrGroup, extractYear } from "@/lib/seating-algorithm.js";
 import { buildMultiSubjectPrintHtml } from "@/lib/quick-seating";
 import { exportSeatingWorkbook } from "@/lib/seating-export";
 import { autoAssignProfessors, listDuties, removeDuty } from "@/lib/professors";
@@ -204,23 +204,68 @@ function SeatingPage() {
   const availableBatchOptions = useMemo(() => {
     if (distinctBatches.length < 2) return [];
     return distinctBatches.map((b) => ({
-      value: b.key || b.label,
+      value: b.batch_id || b.key || b.label,
+      key: b.key,
       label: b.label,
       name: b.batch_name || b.label,
       count: b.count,
-      id: b.key || b.batch_id,
+      id: b.batch_id || b.key,
       batch_id: b.batch_id,
+      course_id: b.course_id,
+      exam_id: b.exam_id,
     }));
   }, [distinctBatches]);
 
-  // Color mapping per batch for visual clarity
-  const batchColorMap = useMemo(() => {
-    const map = new Map();
-    availableBatchOptions.forEach((b, idx) => {
-      map.set(b.value, BATCH_COLOR_PALETTES[idx % BATCH_COLOR_PALETTES.length]);
-    });
-    return map;
-  }, [availableBatchOptions]);
+  const batchAName = useMemo(() => {
+    const opt = availableBatchOptions.find((b) => b.value === alternateBatchA);
+    if (opt) return opt.name || opt.label.split("(")[1]?.replace(")", "") || opt.label;
+    if (alternateBatchA) {
+      const yr = extractYear(alternateBatchA);
+      if (yr) return yr;
+    }
+    return "Batch 1";
+  }, [availableBatchOptions, alternateBatchA]);
+
+  const batchBName = useMemo(() => {
+    const opt = availableBatchOptions.find((b) => b.value === alternateBatchB);
+    if (opt) return opt.name || opt.label.split("(")[1]?.replace(")", "") || opt.label;
+    if (alternateBatchB) {
+      const yr = extractYear(alternateBatchB);
+      if (yr) return yr;
+    }
+    return "Batch 2";
+  }, [availableBatchOptions, alternateBatchB]);
+
+  // Reliable palette resolver for any cell group_label
+  const getBatchPalette = (label) => {
+    if (!label) return BATCH_COLOR_PALETTES[0];
+    const lbl = String(label).toUpperCase();
+    
+    // Check if matches Batch A (Column 1, 3, 5...) -> Emerald
+    if (alternateBatchA && matchesBatchOrGroup({ label }, alternateBatchA)) {
+      return BATCH_COLOR_PALETTES[0];
+    }
+    // Check if matches Batch B (Column 2, 4, 6...) -> Sky Blue
+    if (alternateBatchB && matchesBatchOrGroup({ label }, alternateBatchB)) {
+      return BATCH_COLOR_PALETTES[1];
+    }
+
+    // Check availableBatchOptions by index
+    for (let i = 0; i < availableBatchOptions.length; i++) {
+      const b = availableBatchOptions[i];
+      if (matchesBatchOrGroup({ label }, b.value) || matchesBatchOrGroup({ label }, b.label) || matchesBatchOrGroup({ label }, b.name)) {
+        return BATCH_COLOR_PALETTES[i % BATCH_COLOR_PALETTES.length];
+      }
+    }
+
+    // Direct Year keyword fallback
+    if (lbl.includes("2024")) return BATCH_COLOR_PALETTES[0];
+    if (lbl.includes("2023")) return BATCH_COLOR_PALETTES[1];
+    if (lbl.includes("2022")) return BATCH_COLOR_PALETTES[2];
+    if (lbl.includes("2025")) return BATCH_COLOR_PALETTES[3];
+
+    return BATCH_COLOR_PALETTES[0];
+  };
 
   // Default to simple strategy if fewer than 2 distinct batches exist
   useEffect(() => {
@@ -972,8 +1017,32 @@ function SeatingPage() {
                         </Select>
                       </div>
 
-                      <p className="text-[10px] text-muted-foreground pt-1">
-                        Zero copying guarantee: students of Batch A and Batch B sit in alternate columns.
+                      {/* Visual Column Pattern Preview */}
+                      <div className="rounded-lg border border-primary/20 bg-background/80 p-2.5 space-y-1.5 shadow-2xs">
+                        <div className="flex items-center justify-between text-[11px]">
+                          <span className="font-semibold text-foreground flex items-center gap-1">
+                            <span>⚡</span> Column Alternation Pattern:
+                          </span>
+                          <span className="text-muted-foreground font-mono text-[10px]">Zero Adjacent Copying</span>
+                        </div>
+                        <div className="grid grid-cols-4 gap-1.5 text-center font-mono text-[10px]">
+                          <div className="p-1.5 rounded-md bg-emerald-500/15 border border-emerald-400 text-emerald-800 dark:text-emerald-300 font-bold truncate">
+                            Col 1: {batchAName}
+                          </div>
+                          <div className="p-1.5 rounded-md bg-sky-500/15 border border-sky-400 text-sky-800 dark:text-sky-300 font-bold truncate">
+                            Col 2: {batchBName}
+                          </div>
+                          <div className="p-1.5 rounded-md bg-emerald-500/15 border border-emerald-400 text-emerald-800 dark:text-emerald-300 font-bold truncate">
+                            Col 3: {batchAName}
+                          </div>
+                          <div className="p-1.5 rounded-md bg-sky-500/15 border border-sky-400 text-sky-800 dark:text-sky-300 font-bold truncate">
+                            Col 4: {batchBName}
+                          </div>
+                        </div>
+                      </div>
+
+                      <p className="text-[10px] text-muted-foreground pt-0.5">
+                        ✓ Column 1, 3, 5 = {batchAName} | Column 2, 4, 6 = {batchBName}
                       </p>
                     </div>
                   )}
@@ -1356,11 +1425,21 @@ function SeatingPage() {
                               <thead>
                                 <tr>
                                   <th className="p-1.5 text-[10px] text-muted-foreground font-mono">Row</th>
-                                  {Array.from({ length: r.room.seats_per_row }, (_, i) => (
-                                    <th key={i} className="p-1.5 text-[11px] text-muted-foreground font-semibold text-center min-w-[95px]">
-                                      Column {i + 1}
-                                    </th>
-                                  ))}
+                                  {Array.from({ length: r.room.seats_per_row }, (_, i) => {
+                                    const isOddCol = i % 2 === 0;
+                                    const batchTitle = isOddCol ? batchAName : batchBName;
+                                    const colPalette = isOddCol ? BATCH_COLOR_PALETTES[0] : BATCH_COLOR_PALETTES[1];
+                                    return (
+                                      <th key={i} className="p-1.5 text-center min-w-[100px]">
+                                        <div className="text-[11px] font-semibold text-foreground">Column {i + 1}</div>
+                                        {strategy === "alternate" && isAlternationAllowed && (
+                                          <span className={`inline-block mt-0.5 text-[9.5px] px-2 py-0.5 rounded font-mono font-bold truncate max-w-[90px] border ${colPalette.border} ${colPalette.bg} ${colPalette.text}`}>
+                                            {batchTitle}
+                                          </span>
+                                        )}
+                                      </th>
+                                    );
+                                  })}
                                 </tr>
                               </thead>
                               <tbody className="divide-y divide-border/40">
@@ -1370,39 +1449,51 @@ function SeatingPage() {
                                       R{rowIdx + 1}
                                     </td>
                                     {rowCells.map((cell, colIdx) => {
-                                      const palette = cell.student ? (batchColorMap.get(cell.group_label) || BATCH_COLOR_PALETTES[0]) : null;
+                                      const palette = cell.student ? getBatchPalette(cell.group_label) : null;
+                                      const isOddCol = colIdx % 2 === 0;
+                                      const expectedBatchName = isOddCol ? batchAName : batchBName;
 
                                       return (
                                         <td key={colIdx} className="p-1.5 text-center">
                                           <div
                                             className={`p-2 rounded-lg text-xs flex flex-col items-center justify-center transition-all ${
                                               cell.isVacant
-                                                ? "border border-dashed border-border/80 bg-muted/20 text-muted-foreground/60 min-h-[58px]"
-                                                : `border ${palette.border} ${palette.bg} shadow-2xs min-h-[58px]`
+                                                ? "border border-dashed border-border/80 bg-muted/20 text-muted-foreground/60 min-h-[62px]"
+                                                : `border ${palette.border} ${palette.bg} shadow-2xs min-h-[62px]`
                                             }`}
                                           >
                                             {cell.isVacant ? (
-                                              <span className="font-mono text-[10px] text-muted-foreground font-medium">
-                                                Vacant Seat
-                                              </span>
+                                              <div className="flex flex-col items-center justify-center gap-0.5">
+                                                <span className="font-mono text-[9px] text-muted-foreground/60">
+                                                  R{rowIdx + 1}-C{colIdx + 1}
+                                                </span>
+                                                <span className="font-mono text-[10px] text-muted-foreground font-medium">
+                                                  Vacant Seat
+                                                </span>
+                                                {strategy === "alternate" && isAlternationAllowed && (
+                                                  <span className="text-[8.5px] text-muted-foreground/50 font-mono">
+                                                    ({expectedBatchName})
+                                                  </span>
+                                                )}
+                                              </div>
                                             ) : (
                                               <>
                                                 <div className="flex items-center justify-between w-full text-[9px] font-mono text-muted-foreground mb-0.5">
-                                                  <span>R{rowIdx + 1}-S{colIdx + 1}</span>
+                                                  <span className="font-semibold">R{rowIdx + 1}-C{colIdx + 1}</span>
                                                   {cell.group_label && (
-                                                    <span className={`text-[8.5px] px-1 rounded ${palette.badge} font-semibold truncate max-w-[50px]`}>
-                                                      {cell.group_label.split(" ")[0]}
+                                                    <span className={`text-[8.5px] px-1.5 py-0.2 rounded ${palette.badge} font-bold truncate max-w-[60px]`}>
+                                                      {extractYear(cell.group_label) || cell.group_label.split(" ")[0]}
                                                     </span>
                                                   )}
                                                 </div>
                                                 <span
-                                                  className="font-bold font-mono text-xs text-foreground block truncate max-w-[85px]"
+                                                  className="font-bold font-mono text-xs text-foreground block truncate max-w-[90px]"
                                                   title={cell.student?.registration_number || cell.student?.roll_number}
                                                 >
                                                   {cell.student?.registration_number || cell.student?.roll_number || "—"}
                                                 </span>
                                                 <span
-                                                  className="text-[10px] text-muted-foreground block truncate max-w-[85px]"
+                                                  className="text-[10px] text-muted-foreground block truncate max-w-[90px]"
                                                   title={cell.student?.name}
                                                 >
                                                   {cell.student?.name || "Student"}

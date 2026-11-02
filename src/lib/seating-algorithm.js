@@ -91,6 +91,39 @@ export function validateMergePair(groupA, groupB) {
 }
 
 /**
+ * Robust helper to match a queue group against a target identifier.
+ * Matches by compound key, batch_id, label, course_code + batch_name, or year.
+ */
+export function matchesBatchOrGroup(q, target) {
+  if (!target || !q) return false;
+  const t = String(target).trim().toUpperCase();
+  const qBatchId = String(q.batch_id || "").trim().toUpperCase();
+  const qCourseId = String(q.course_id || "").trim().toUpperCase();
+  const qExamId = String(q.exam_id || "").trim().toUpperCase();
+  const qLabel = String(q.label || "").trim().toUpperCase();
+  const qBatchName = String(q.batch_name || "").trim().toUpperCase();
+  const qCourseCode = String(q.course_code || "").trim().toUpperCase();
+  const fullLabel = `${qCourseCode} ${qBatchName}`.trim().toUpperCase();
+  const compoundKey = `${qCourseId}_${qBatchId}_${qExamId}`;
+
+  // 1. Direct compound key or batch_id matching
+  if (compoundKey && (t === compoundKey || t.includes(compoundKey))) return true;
+  if (qBatchId && (t === qBatchId || t.includes(qBatchId))) return true;
+
+  // 2. Year matching (e.g. "2024", "2023")
+  const targetYear = extractYear(t);
+  const groupYear = getGroupYear(q);
+  if (targetYear && groupYear && targetYear === groupYear) return true;
+
+  // 3. Name or label substring matching
+  if (t === qLabel || qLabel.includes(t) || t.includes(qLabel)) return true;
+  if (fullLabel && (t === fullLabel || fullLabel.includes(t) || t.includes(fullLabel))) return true;
+  if (qBatchName && (t === qBatchName || qBatchName.includes(t) || t.includes(qBatchName))) return true;
+
+  return false;
+}
+
+/**
  * Smart pairing for alternate row seating:
  * Merges 2 different batches/years.
  * Priority 1: Same course, different years/batches (e.g. CSE 2023 + CSE 2024).
@@ -357,14 +390,8 @@ export function buildSeatingPlan(groups, rooms, strategy = "alternate", options 
         const leftovers = [];
 
         for (const q of queues) {
-          const qLabel = q.label.trim().toUpperCase();
-          const qCourse = (q.course_code || "").trim().toUpperCase();
-          const qBatch = (q.batch_name || "").trim().toUpperCase();
-          const qBatchId = (q.batch_id || "").trim().toUpperCase();
-          const full = `${qCourse} ${qBatch}`.trim();
-
-          const matchesA = qLabel.includes(matchA) || matchA.includes(qLabel) || full.includes(matchA) || matchA.includes(full) || qBatchId === matchA;
-          const matchesB = qLabel.includes(matchB) || matchB.includes(qLabel) || full.includes(matchB) || matchB.includes(full) || qBatchId === matchB;
+          const matchesA = matchesBatchOrGroup(q, matchA);
+          const matchesB = matchesBatchOrGroup(q, matchB);
 
           if (matchesA && !matchesB) {
             streamA.push(q);
@@ -375,20 +402,22 @@ export function buildSeatingPlan(groups, rooms, strategy = "alternate", options 
           }
         }
 
+        // Resilient fallback: If manual match failed to separate both streams,
+        // use automatic distinct batch pairing so alternate seating never breaks!
         if (streamA.length === 0 || streamB.length === 0) {
-          // If either stream is empty, alternation between 2 batches is impossible!
+          const paired = pairQueuesForAlternate(queues);
+          streamA = paired.streamA;
+          streamB = paired.streamB;
+        }
+
+        if (streamA.length === 0 || streamB.length === 0) {
           isAlternate = false;
         } else {
-          // Leftovers: ensure same batch never enters both streams
+          // Leftovers: ensure unassigned queues are balanced into smaller stream
           for (const l of leftovers) {
-            const lKey = getBatchKey(l);
-            const inA = streamA.some((q) => getBatchKey(q) === lKey);
-            const inB = streamB.some((q) => getBatchKey(q) === lKey);
-            if (inA && !inB) {
-              streamA.push(l);
-            } else if (inB && !inA) {
-              streamB.push(l);
-            } else if (!inA && !inB) {
+            const inA = streamA.includes(l);
+            const inB = streamB.includes(l);
+            if (!inA && !inB) {
               const countA = streamA.reduce((sum, q) => sum + q.items.length, 0);
               const countB = streamB.reduce((sum, q) => sum + q.items.length, 0);
               if (countA <= countB) streamA.push(l);
@@ -427,8 +456,8 @@ export function buildSeatingPlan(groups, rooms, strategy = "alternate", options 
 
     if (isAlternate && streamsList.length >= 2) {
       // --- Column-wise Alternating Seating (2 Distinct Batches) ---
-      // Odd columns (Col 0, 2, 4...) -> Stream A (Batch A)
-      // Even columns (Col 1, 3, 5...) -> Stream B (Batch B)
+      // Odd columns (Col 0, 2, 4...) -> Stream A (Batch A, e.g. 2024)
+      // Even columns (Col 1, 3, 5...) -> Stream B (Batch B, e.g. 2023)
       // If one batch runs out of students, that seat remains VACANT rather than placing
       // the same batch in adjacent columns!
       const numStreams = streamsList.length;
@@ -456,10 +485,8 @@ export function buildSeatingPlan(groups, rooms, strategy = "alternate", options 
           const student = found.items.shift();
           if (!student) continue;
 
-          // Check front/back in column and left/right across rows
-          const above = row > 0 ? (grid[row - 1]?.[col] ?? null) : null;
+          // Check left desk on the bench (adjacent column in the same row)
           const left = col > 0 ? (grid[row]?.[col - 1] ?? null) : null;
-          if (above && found.label === above) adjacentConflicts++;
           if (left && found.label === left) adjacentConflicts++;
 
           grid[row][col] = found.label;

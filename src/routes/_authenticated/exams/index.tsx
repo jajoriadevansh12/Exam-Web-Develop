@@ -701,40 +701,56 @@ function ExamsPage() {
                 </p>
               )}
 
-              {/* Multiple Batches Option */}
+              {/* Multiple Batches Option for Alternate Seating */}
               {batches.length > 1 && (
-                <div className="pt-1">
-                  <Button
-                    type="button"
-                    variant="ghost"
-                    size="sm"
-                    className="h-7 text-xs text-muted-foreground hover:text-foreground px-2"
-                    onClick={() => setShowMultipleBatches((v) => !v)}
-                  >
-                    {showMultipleBatches ? "− Hide additional batches" : "+ Combine with other batches (Optional)"}
-                  </Button>
+                <div className="pt-1.5 space-y-2">
+                  <div className="flex items-center justify-between">
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      size="sm"
+                      className="h-7 text-xs text-primary hover:text-primary font-semibold px-2 gap-1.5"
+                      onClick={() => setShowMultipleBatches((v) => !v)}
+                    >
+                      {showMultipleBatches || form.batchSelections.length > 1
+                        ? "− Hide additional batches"
+                        : "➕ Combine 2nd Batch for Alternate Seating"}
+                    </Button>
 
-                  {showMultipleBatches && (
-                    <div className="mt-2 rounded-lg border border-border p-2.5 max-h-36 overflow-y-auto space-y-1.5 bg-background">
-                      <p className="text-[11px] text-muted-foreground mb-1">
-                        Select any additional batches sitting for this same examination paper:
+                    {form.batchSelections.length >= 2 && (
+                      <Badge className="bg-emerald-500/15 text-emerald-700 dark:text-emerald-400 border-emerald-300 font-mono text-[10px]">
+                        ✓ {form.batchSelections.length} Batches Combined (Alternate Ready)
+                      </Badge>
+                    )}
+                  </div>
+
+                  {(showMultipleBatches || form.batchSelections.length > 1) && (
+                    <div className="rounded-lg border border-primary/25 p-2.5 max-h-40 overflow-y-auto space-y-1.5 bg-background shadow-2xs">
+                      <p className="text-[11px] font-medium text-foreground mb-1">
+                        Select additional batches to sit together in alternating columns (e.g. 2024 ⇄ 2023):
                       </p>
                       {batches.map((b) => {
                         const isChecked = form.batchSelections.some((sel) => sel.batch_id === b.id);
+                        const isPrimary = b.id === primaryBatchId;
                         const count = batchCounts[b.id] || 0;
                         const courseCode = b.courses?.code || "";
                         const label = `${courseCode ? `[${courseCode}] ` : ""}${b.name}`;
                         return (
                           <label
                             key={b.id}
-                            className="flex items-center justify-between gap-2 p-1.5 rounded hover:bg-muted/50 cursor-pointer text-xs"
+                            className={`flex items-center justify-between gap-2 p-1.5 rounded transition-colors cursor-pointer text-xs ${
+                              isChecked ? "bg-primary/10 border border-primary/20 font-medium" : "hover:bg-muted/50"
+                            }`}
                           >
                             <div className="flex items-center gap-2">
                               <Checkbox
                                 checked={isChecked}
+                                disabled={isPrimary}
                                 onCheckedChange={() => toggleBatch(b.course_id, b.id)}
                               />
-                              <span className="text-foreground">{label}</span>
+                              <span className="text-foreground">
+                                {label} {isPrimary ? "(Primary)" : ""}
+                              </span>
                             </div>
                             <span className="font-mono text-muted-foreground text-[11px]">
                               ({count} students)
