@@ -437,6 +437,11 @@ export type ExamDetailed = Exam & {
   groups: ExamGroup[];
   totalStudents: number;
   clashes?: Array<{ batchName: string; otherExamName: string }>;
+  seatingPlan?: SavedPlan | null;
+  seatingStatus: "done" | "pending";
+  seatingStrategy?: string | null;
+  roomsUsed: number;
+  seatedCount: number;
 };
 
 export async function listExamsDetailed(): Promise<ExamDetailed[]> {
@@ -451,12 +456,27 @@ export async function listExamsDetailed(): Promise<ExamDetailed[]> {
           courses: { name: string; code: string } | null;
           batches: { name: string } | null;
         }>;
+        seating_plans: Array<{
+          id: string;
+          exam_id: string;
+          strategy: string;
+          total_students: number;
+          rooms_used: number;
+          created_at: string;
+        }> | {
+          id: string;
+          exam_id: string;
+          strategy: string;
+          total_students: number;
+          rooms_used: number;
+          created_at: string;
+        } | null;
       }
     >
   >(
     await supabase
       .from("exams")
-      .select("*, exam_groups(*, courses(name, code), batches(name))")
+      .select("*, exam_groups(*, courses(name, code), batches(name)), seating_plans(*)")
       .order("exam_date", { ascending: false }),
   );
 
@@ -498,6 +518,14 @@ export async function listExamsDetailed(): Promise<ExamDetailed[]> {
       }
     }
 
+    const planRaw: any = Array.isArray(exam.seating_plans)
+      ? exam.seating_plans[0]
+      : exam.seating_plans;
+    const seatingDone = Boolean(planRaw && planRaw.total_students > 0);
+    const seatingStrategy = planRaw?.strategy || null;
+    const roomsUsed = Number(planRaw?.rooms_used) || 0;
+    const seatedCount = Number(planRaw?.total_students) || 0;
+
     return {
       ...exam,
       category,
@@ -505,6 +533,11 @@ export async function listExamsDetailed(): Promise<ExamDetailed[]> {
       groups: exam.exam_groups || [],
       totalStudents,
       clashes,
+      seatingPlan: planRaw || null,
+      seatingStatus: seatingDone ? "done" : "pending",
+      seatingStrategy,
+      roomsUsed,
+      seatedCount,
     };
   });
 }

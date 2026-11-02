@@ -8,12 +8,14 @@ import {
   Calendar,
   CheckCircle2,
   Clock,
+  Eye,
   Folder,
   FolderPlus,
   Loader2,
   Pencil,
   Plus,
   Search,
+  Shuffle,
   Trash2,
   Users,
 } from "lucide-react";
@@ -152,75 +154,49 @@ function ExamsPage() {
 
   const primaryBatchId = primaryBatch?.id || "";
 
-  // Available subjects for the selected batch with exact student counts (handles MECH, ECOM, CSE branches)
-  const batchSubjects = useMemo(() => {
-    if (!primaryBatch) return [];
+  const secondaryBatch = useMemo(() => {
+    const second = form.batchSelections[1];
+    if (!second) return null;
+    return batches.find((b) => b.id === second.batch_id) || null;
+  }, [form.batchSelections, batches]);
 
-    const fromSubjects = allSubjects
-      .filter((s) => {
-        if (s.batch_id && s.batch_id === primaryBatch.id) return true;
-        if (!s.batch_id && s.course_id === primaryBatch.course_id) return true;
-        if (s.batches?.name && s.batches.name.toLowerCase() === primaryBatch.name.toLowerCase()) return true;
-        return false;
-      })
-      .map((s) => {
-        // Exact student count for this specific subject
-        const count =
-          subjectCountData.bySubjectId[s.id] ??
-          (s.course_id ? subjectCountData.byCourseAndBatch[`${s.course_id}_${primaryBatch.id}`] : null) ??
-          batchCounts[primaryBatch.id] ??
-          0;
+  const secondaryBatchId = secondaryBatch?.id || "";
 
-        const branchCode = s.courses?.code || "";
-        const codePrefix = s.code ? `[${s.code}] ` : "";
+  // Subject suggestions for 1-click select
+  const popularSubjects = useMemo(() => {
+    const seen = new Set<string>();
+    const list: string[] = [];
 
-        return {
-          id: s.id,
-          code: s.code || "",
-          name: s.name,
-          studentCount: count,
-          branchCode,
-          label: `${codePrefix}${s.name}`,
-        };
-      });
-
-    const seenNames = new Set(fromSubjects.map((s) => s.name.toLowerCase().trim()));
-    const fromExams: Array<{
-      id: string;
-      code: string;
-      name: string;
-      studentCount: number;
-      branchCode: string;
-      label: string;
-    }> = [];
-
-    for (const e of exams) {
-      const hasThisBatch = e.groups.some((g) => g.batch_id === primaryBatch.id);
-      const paperName = (e.subjectName || e.name || "").trim();
-      if (hasThisBatch && paperName && !seenNames.has(paperName.toLowerCase())) {
-        seenNames.add(paperName.toLowerCase());
-        const count = e.totalStudents || batchCounts[primaryBatch.id] || 0;
-        fromExams.push({
-          id: `exam_${e.id}`,
-          code: "",
-          name: paperName,
-          studentCount: count,
-          branchCode: "",
-          label: paperName,
-        });
+    if (primaryBatch) {
+      for (const s of allSubjects) {
+        if (s.batch_id === primaryBatch.id || s.course_id === primaryBatch.course_id) {
+          const n = s.name.trim();
+          if (!seen.has(n.toLowerCase())) {
+            seen.add(n.toLowerCase());
+            list.push(n);
+          }
+        }
       }
     }
 
-    return [...fromSubjects, ...fromExams];
-  }, [allSubjects, exams, primaryBatch, subjectCountData, batchCounts]);
+    for (const s of allSubjects) {
+      const n = s.name.trim();
+      if (!seen.has(n.toLowerCase())) {
+        seen.add(n.toLowerCase());
+        list.push(n);
+      }
+    }
 
-  const selectedSubject = useMemo(() => {
-    if (!form.subjectName) return null;
-    return (
-      batchSubjects.find((s) => s.name.toLowerCase() === form.subjectName.toLowerCase().trim()) ||
-      null
-    );
-  }, [batchSubjects, form.subjectName]);
+    for (const e of exams) {
+      const n = (e.subjectName || e.name || "").trim();
+      if (n && !seen.has(n.toLowerCase())) {
+        seen.add(n.toLowerCase());
+        list.push(n);
+      }
+    }
+
+    return list;
+  }, [primaryBatch, allSubjects, exams]);
 
   // Collect distinct categories from both defaults and existing exams
   const allCategories = useMemo(() => {
@@ -287,13 +263,10 @@ function ExamsPage() {
     return form.batchSelections.reduce((sum, b) => sum + (batchCounts[b.batch_id] || 0), 0);
   }, [form.batchSelections, batchCounts]);
 
-  // Exact student count for the chosen subject (handles MECH vs ECOM vs CS subject sizes)
+  // Exact student count for the scheduled exam
   const effectiveExamStudentCount = useMemo(() => {
-    if (selectedSubject && typeof selectedSubject.studentCount === "number" && selectedSubject.studentCount > 0) {
-      return selectedSubject.studentCount;
-    }
     return totalFormStudents;
-  }, [selectedSubject, totalFormStudents]);
+  }, [totalFormStudents]);
 
   // Save Exam with Batches Mutation
   const saveMutation = useMutation({
@@ -377,6 +350,47 @@ function ExamsPage() {
     });
     setCourseFilterInDialog("all");
     setOpen(true);
+  };
+
+  const setPrimaryBatch = (batchId: string) => {
+    const b = batches.find((x) => x.id === batchId);
+    if (!b) return;
+    setForm((prev) => {
+      const second = prev.batchSelections[1];
+      const newSelections = [{ course_id: b.course_id, batch_id: b.id }];
+      if (second && second.batch_id !== b.id) {
+        newSelections.push(second);
+      }
+      return {
+        ...prev,
+        batchSelections: newSelections,
+      };
+    });
+  };
+
+  const setSecondaryBatch = (batchId: string) => {
+    if (batchId === "none" || !batchId) {
+      setForm((prev) => ({
+        ...prev,
+        batchSelections: prev.batchSelections.slice(0, 1),
+      }));
+      return;
+    }
+    const b = batches.find((x) => x.id === batchId);
+    if (!b) return;
+    setForm((prev) => {
+      const primary = prev.batchSelections[0];
+      if (!primary) {
+        return {
+          ...prev,
+          batchSelections: [{ course_id: b.course_id, batch_id: b.id }],
+        };
+      }
+      return {
+        ...prev,
+        batchSelections: [primary, { course_id: b.course_id, batch_id: b.id }],
+      };
+    });
   };
 
   const toggleBatch = (course_id: string, batch_id: string) => {
@@ -506,30 +520,51 @@ function ExamsPage() {
               <table className="w-full text-sm">
                 <thead className="bg-muted/60 text-left text-xs uppercase tracking-wider text-muted-foreground border-b border-border">
                   <tr>
-                    <th className="px-5 py-3 font-semibold">Folder & Subject</th>
-                    <th className="px-5 py-3 font-semibold">Appearing Batches & Students</th>
-                    <th className="px-5 py-3 font-semibold">Date & Session</th>
-                    <th className="px-5 py-3 font-semibold">Clash Status</th>
-                    <th className="px-5 py-3 text-right font-semibold">Actions</th>
+                    <th className="px-4 py-3 font-semibold">Folder & Paper</th>
+                    <th className="px-4 py-3 font-semibold">Date & Session</th>
+                    <th className="px-4 py-3 font-semibold">Appearing Batches</th>
+                    <th className="px-4 py-3 font-semibold">Seating Status</th>
+                    <th className="px-4 py-3 font-semibold">Seating Type</th>
+                    <th className="px-4 py-3 font-semibold">Schedule Clash</th>
+                    <th className="px-4 py-3 text-right font-semibold">Actions</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-border">
                   {filteredExams.map((exam) => {
                     const hasClash = exam.clashes && exam.clashes.length > 0;
+                    const isPlanDone = exam.seatingStatus === "done";
+                    const isAlternate =
+                      exam.seatingStrategy === "alternate" ||
+                      exam.seatingStrategy === "alternate_columns";
+
                     return (
                       <tr key={exam.id} className="hover:bg-muted/30 transition-colors">
-                        <td className="px-5 py-3.5">
-                          <div className="flex items-center gap-2">
+                        {/* 1. Folder & Paper */}
+                        <td className="px-4 py-3.5">
+                          <div className="space-y-1">
                             <span className="inline-flex items-center px-2 py-0.5 rounded text-[11px] font-medium bg-muted border border-border text-foreground font-mono">
                               {exam.category}
                             </span>
-                            <span className="font-semibold text-foreground text-sm">
+                            <div className="font-semibold text-foreground text-sm">
                               {exam.subjectName}
-                            </span>
+                            </div>
                           </div>
                         </td>
 
-                        <td className="px-5 py-3.5">
+                        {/* 2. Date & Session */}
+                        <td className="px-4 py-3.5 whitespace-nowrap">
+                          <div className="flex items-center gap-1.5 text-xs text-foreground font-medium">
+                            <Calendar className="size-3.5 text-muted-foreground" />
+                            {exam.exam_date}
+                          </div>
+                          <div className="flex items-center gap-1.5 text-xs text-muted-foreground capitalize mt-0.5">
+                            <Clock className="size-3 text-muted-foreground" />
+                            {exam.session}
+                          </div>
+                        </td>
+
+                        {/* 3. Appearing Batches */}
+                        <td className="px-4 py-3.5">
                           <div className="space-y-1">
                             {exam.groups.length === 0 ? (
                               <span className="text-xs text-muted-foreground italic">No batches attached</span>
@@ -549,24 +584,80 @@ function ExamsPage() {
                             )}
                             <div className="pt-0.5">
                               <span className="text-[11px] font-semibold text-primary font-mono">
-                                Total: ({exam.totalStudents} students)
+                                Total: {exam.totalStudents} students
                               </span>
                             </div>
                           </div>
                         </td>
 
-                        <td className="px-5 py-3.5 whitespace-nowrap">
-                          <div className="flex items-center gap-1.5 text-xs text-foreground font-medium">
-                            <Calendar className="size-3.5 text-muted-foreground" />
-                            {exam.exam_date}
-                          </div>
-                          <div className="flex items-center gap-1.5 text-xs text-muted-foreground capitalize mt-0.5">
-                            <Clock className="size-3 text-muted-foreground" />
-                            {exam.session}
-                          </div>
+                        {/* 4. Seating Status (Done vs Pending) */}
+                        <td className="px-4 py-3.5 whitespace-nowrap">
+                          {isPlanDone ? (
+                            <div>
+                              <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-semibold bg-emerald-500/15 text-emerald-700 dark:text-emerald-400 border border-emerald-500/30">
+                                <CheckCircle2 className="size-3.5" /> Seating Done
+                              </span>
+                              <div className="text-[11px] text-muted-foreground mt-1 font-mono">
+                                {exam.seatedCount} seated in {exam.roomsUsed} room{exam.roomsUsed === 1 ? "" : "s"}
+                              </div>
+                            </div>
+                          ) : (
+                            <div>
+                              <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-medium bg-amber-500/10 text-amber-700 dark:text-amber-400 border border-amber-500/25">
+                                <Clock className="size-3.5" /> Plan Pending
+                              </span>
+                              <div className="text-[11px] text-muted-foreground mt-1">
+                                Seating not generated
+                              </div>
+                            </div>
+                          )}
                         </td>
 
-                        <td className="px-5 py-3.5">
+                        {/* 5. Seating Type (Alternate vs Sequential) */}
+                        <td className="px-4 py-3.5 whitespace-nowrap">
+                          {isPlanDone ? (
+                            isAlternate ? (
+                              <div>
+                                <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-semibold bg-blue-500/15 text-blue-700 dark:text-blue-400 border border-blue-500/30">
+                                  <Shuffle className="size-3.5" /> Alternate (Col-wise)
+                                </span>
+                                <div className="text-[10px] text-muted-foreground mt-0.5">
+                                  Col 1 ⇄ Col 2 interleaved
+                                </div>
+                              </div>
+                            ) : (
+                              <div>
+                                <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-medium bg-slate-500/15 text-slate-700 dark:text-slate-300 border border-slate-500/30">
+                                  <BookOpen className="size-3.5" /> Sequential
+                                </span>
+                                <div className="text-[10px] text-muted-foreground mt-0.5">
+                                  Standard continuous fill
+                                </div>
+                              </div>
+                            )
+                          ) : exam.groups.length >= 2 ? (
+                            <div>
+                              <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-medium bg-indigo-500/10 text-indigo-700 dark:text-indigo-400 border border-indigo-500/30">
+                                <Shuffle className="size-3.5" /> Alternate Ready
+                              </span>
+                              <div className="text-[10px] text-muted-foreground mt-0.5">
+                                {exam.groups.length} batches merged
+                              </div>
+                            </div>
+                          ) : (
+                            <div>
+                              <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-medium bg-muted text-muted-foreground border border-border">
+                                <BookOpen className="size-3.5" /> Sequential (1 Batch)
+                              </span>
+                              <div className="text-[10px] text-muted-foreground mt-0.5">
+                                Single batch seating
+                              </div>
+                            </div>
+                          )}
+                        </td>
+
+                        {/* 6. Clash Status */}
+                        <td className="px-4 py-3.5">
                           {hasClash ? (
                             <div className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded bg-amber-500/10 border border-amber-500/30 text-amber-700 dark:text-amber-400 text-xs font-medium">
                               <AlertTriangle className="size-3.5 shrink-0" />
@@ -580,25 +671,42 @@ function ExamsPage() {
                           )}
                         </td>
 
-                        <td className="px-5 py-3.5 text-right whitespace-nowrap space-x-1">
-                          <Button asChild variant="outline" size="sm" className="gap-1.5">
-                            <Link
-                              to="/exams/seating"
-                              search={{
-                                date: exam.exam_date,
-                                session: exam.session,
-                                examId: exam.id,
-                              }}
-                            >
-                              <Armchair className="size-3.5" /> Seating
-                            </Link>
-                          </Button>
+                        {/* 7. Actions */}
+                        <td className="px-4 py-3.5 text-right whitespace-nowrap space-x-1.5">
+                          {isPlanDone ? (
+                            <Button asChild variant="default" size="sm" className="gap-1.5 bg-emerald-600 hover:bg-emerald-700 text-white h-8 text-xs font-medium shadow-xs">
+                              <Link
+                                to="/exams/seating"
+                                search={{
+                                  date: exam.exam_date,
+                                  session: exam.session,
+                                  examId: exam.id,
+                                }}
+                              >
+                                <Eye className="size-3.5" /> View Plan
+                              </Link>
+                            </Button>
+                          ) : (
+                            <Button asChild variant="outline" size="sm" className="gap-1.5 border-primary/40 text-primary hover:bg-primary/10 h-8 text-xs font-medium">
+                              <Link
+                                to="/exams/seating"
+                                search={{
+                                  date: exam.exam_date,
+                                  session: exam.session,
+                                  examId: exam.id,
+                                }}
+                              >
+                                <Armchair className="size-3.5" /> Make Seating
+                              </Link>
+                            </Button>
+                          )}
 
                           <Button
                             variant="ghost"
                             size="icon"
                             className="size-8"
                             onClick={() => openEditExam(exam)}
+                            title="Edit Exam"
                           >
                             <Pencil className="size-3.5" />
                           </Button>
@@ -609,6 +717,7 @@ function ExamsPage() {
                             className="size-8 text-destructive hover:bg-destructive/10"
                             onClick={() => removeMutation.mutate(exam.id)}
                             disabled={removeMutation.isPending}
+                            title="Delete Exam"
                           >
                             <Trash2 className="size-3.5" />
                           </Button>
@@ -625,325 +734,308 @@ function ExamsPage() {
 
       {/* Add / Edit Examination Dialog */}
       <Dialog open={open} onOpenChange={setOpen}>
-        <DialogContent className="max-w-xl max-h-[90vh] overflow-y-auto">
+        <DialogContent className="max-w-2xl max-h-[90vh] overflow-y-auto">
           <DialogHeader>
-            <DialogTitle>{editingExam ? "Edit Examination Details" : "New Examination Details"}</DialogTitle>
+            <DialogTitle className="text-lg font-bold flex items-center gap-2">
+              <BookOpen className="size-5 text-primary" />
+              {editingExam ? "Edit Examination Details" : "New Examination Scheduling"}
+            </DialogTitle>
             <DialogDescription>
-              Define exam category/folder, subject, schedule date & session, and select appearing batches.
+              First enter exam/paper name & schedule date, then choose batches and merge for alternate seating.
             </DialogDescription>
           </DialogHeader>
 
           <div className="space-y-4 py-2">
-            {/* 1. Batch Selection (First Requirement) */}
-            <div className="space-y-2 rounded-xl border border-primary/20 bg-primary/5 p-3.5">
+            {/* ── STEP 1: Exam Name & Schedule (First Priority) ── */}
+            <div className="rounded-xl border border-primary/20 bg-primary/5 p-4 space-y-3.5">
               <div className="flex items-center justify-between">
-                <Label className="text-xs font-semibold uppercase tracking-wider text-foreground flex items-center gap-1.5">
-                  <Users className="size-3.5 text-primary" />
-                  <span>1. Select Batch (Mandatory) *</span>
+                <Label htmlFor="exam-subject-name" className="text-xs font-bold uppercase tracking-wider text-foreground flex items-center gap-1.5">
+                  <BookOpen className="size-4 text-primary" />
+                  <span>1. Exam / Paper Name *</span>
+                </Label>
+                {form.subjectName && (
+                  <Badge variant="outline" className="font-semibold text-[11px] bg-primary/10 text-primary border-primary/25">
+                    Paper: {form.subjectName}
+                  </Badge>
+                )}
+              </div>
+
+              <div className="space-y-1.5">
+                <Input
+                  id="exam-subject-name"
+                  placeholder="Type exam or paper name (e.g. Data Structures, Applied Physics, Mathematics)..."
+                  value={form.subjectName}
+                  onChange={(e) => setForm({ ...form, subjectName: e.target.value })}
+                  className="bg-background text-sm h-10 font-medium"
+                  autoFocus
+                />
+
+                {/* Quick Click Suggestions */}
+                {popularSubjects.length > 0 && (
+                  <div className="flex flex-wrap items-center gap-1.5 pt-1">
+                    <span className="text-[11px] font-medium text-muted-foreground mr-1">
+                      Suggestions:
+                    </span>
+                    {popularSubjects.slice(0, 6).map((sName) => (
+                      <button
+                        key={sName}
+                        type="button"
+                        onClick={() => setForm((prev) => ({ ...prev, subjectName: sName }))}
+                        className={`text-[11px] px-2 py-0.5 rounded-md border transition-all ${
+                          form.subjectName.toLowerCase() === sName.toLowerCase()
+                            ? "bg-primary text-primary-foreground border-primary font-semibold shadow-xs"
+                            : "bg-background hover:bg-muted text-foreground border-border"
+                        }`}
+                      >
+                        {sName}
+                      </button>
+                    ))}
+                  </div>
+                )}
+              </div>
+
+              {/* Date & Session */}
+              <div className="grid gap-3 sm:grid-cols-2 pt-1">
+                <div className="space-y-1.5">
+                  <Label htmlFor="exam-date" className="text-xs font-semibold flex items-center gap-1">
+                    <Calendar className="size-3.5 text-muted-foreground" />
+                    <span>2. Exam Date *</span>
+                  </Label>
+                  <Input
+                    id="exam-date"
+                    type="date"
+                    value={form.exam_date}
+                    onChange={(e) => setForm({ ...form, exam_date: e.target.value })}
+                    className="bg-background h-9"
+                  />
+                </div>
+
+                <div className="space-y-1.5">
+                  <Label className="text-xs font-semibold flex items-center gap-1">
+                    <Clock className="size-3.5 text-muted-foreground" />
+                    <span>Session Time *</span>
+                  </Label>
+                  <Select
+                    value={form.session}
+                    onValueChange={(val: "morning" | "afternoon" | "evening") =>
+                      setForm({ ...form, session: val })
+                    }
+                  >
+                    <SelectTrigger className="bg-background h-9">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="morning">Morning (09:30 AM - 12:30 PM)</SelectItem>
+                      <SelectItem value="afternoon">Afternoon (01:30 PM - 04:30 PM)</SelectItem>
+                      <SelectItem value="evening">Evening (05:00 PM - 08:00 PM)</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
+              </div>
+
+              {/* Category / Folder Selection */}
+              <div className="space-y-1.5 pt-1 border-t border-primary/10">
+                <Label className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground flex items-center gap-1">
+                  <Folder className="size-3 text-muted-foreground" />
+                  <span>Folder / Exam Term</span>
+                </Label>
+                <div className="grid grid-cols-2 sm:grid-cols-4 gap-1.5">
+                  {DEFAULT_CATEGORIES.map((cat) => (
+                    <Button
+                      key={cat}
+                      type="button"
+                      variant={form.category === cat ? "default" : "outline"}
+                      size="sm"
+                      className="text-xs h-8 font-medium"
+                      onClick={() => setForm({ ...form, category: cat })}
+                    >
+                      {cat}
+                    </Button>
+                  ))}
+                  <Button
+                    type="button"
+                    variant={form.category === "custom" ? "default" : "outline"}
+                    size="sm"
+                    className="text-xs h-8 font-medium"
+                    onClick={() => setForm({ ...form, category: "custom" })}
+                  >
+                    + Custom
+                  </Button>
+                </div>
+
+                {form.category === "custom" && (
+                  <div className="pt-1">
+                    <Input
+                      placeholder="Folder name (e.g. Unit Test 1, Re-Exam, Practical)..."
+                      value={form.customCategory}
+                      onChange={(e) => setForm({ ...form, customCategory: e.target.value })}
+                      className="text-xs bg-background h-8"
+                    />
+                  </div>
+                )}
+              </div>
+            </div>
+
+            {/* ── STEP 2: Batch Selection & Merge for Alternate Seating ── */}
+            <div className="rounded-xl border border-border bg-card p-4 space-y-3">
+              <div className="flex items-center justify-between">
+                <Label className="text-xs font-bold uppercase tracking-wider text-foreground flex items-center gap-1.5">
+                  <Users className="size-4 text-primary" />
+                  <span>3. Select Appearing Batch(es) *</span>
                 </Label>
                 {form.batchSelections.length > 0 && (
-                  <Badge variant="outline" className="font-mono text-[11px] bg-primary/10 text-primary border-primary/25">
+                  <Badge className="font-mono text-xs bg-primary/10 text-primary border-primary/20">
                     👥 {totalFormStudents} Students Enrolled
                   </Badge>
                 )}
               </div>
 
-              <Select
-                value={primaryBatchId}
-                onValueChange={(selectedBatchId) => {
-                  const b = batches.find((x) => x.id === selectedBatchId);
-                  if (b) {
-                    setForm((prev) => ({
-                      ...prev,
-                      batchSelections: [{ course_id: b.course_id, batch_id: b.id }],
-                      subjectName: "", // Reset subject so user picks subject of this new batch
-                    }));
-                  }
-                }}
-              >
-                <SelectTrigger className="w-full bg-background font-medium">
-                  <SelectValue placeholder="-- Choose Batch (e.g. BTECH-CSE 2022-2026) --" />
-                </SelectTrigger>
-                <SelectContent className="max-h-60 overflow-y-auto">
-                  {batches.map((b) => {
-                    const count = batchCounts[b.id] || 0;
-                    const courseCode = b.courses?.code || "";
-                    const label = `${courseCode ? `[${courseCode}] ` : ""}${b.name}`;
-                    return (
-                      <SelectItem key={b.id} value={b.id}>
-                        <div className="flex items-center justify-between w-full gap-4">
-                          <span>{label}</span>
-                          <span className="text-muted-foreground text-xs font-mono">
-                            ({count} students)
-                          </span>
-                        </div>
-                      </SelectItem>
-                    );
-                  })}
-                </SelectContent>
-              </Select>
-
-              {/* Dynamic Enrolled Students Display */}
-              {primaryBatch ? (
-                <div className="flex items-center justify-between rounded-lg border border-primary/30 bg-background px-3 py-2 text-xs shadow-xs">
-                  <div className="flex items-center gap-2">
-                    <span className="font-medium text-foreground">
-                      Batch: {primaryBatch.courses?.code} — {primaryBatch.name}
-                    </span>
-                  </div>
-                  <span className="font-mono font-bold text-primary text-sm">
-                    Total Students: {totalFormStudents}
+              {/* Primary Batch */}
+              <div className="space-y-1.5">
+                <div className="flex items-center justify-between">
+                  <span className="text-xs font-medium text-foreground">
+                    Primary Batch {form.batchSelections.length >= 2 ? "(Column 1, 3, 5...)" : ""}
                   </span>
+                  {primaryBatch && (
+                    <span className="text-[11px] text-muted-foreground font-mono">
+                      {batchCounts[primaryBatch.id] || 0} students
+                    </span>
+                  )}
                 </div>
-              ) : (
-                <p className="text-[11px] text-muted-foreground">
-                  👆 Select a batch above first — subjects and student counts will load automatically.
-                </p>
-              )}
+                <Select
+                  value={primaryBatchId}
+                  onValueChange={setPrimaryBatch}
+                >
+                  <SelectTrigger className="w-full bg-background font-medium h-10">
+                    <SelectValue placeholder="-- Choose Primary Batch (e.g. BTECH-CSE 2024) --" />
+                  </SelectTrigger>
+                  <SelectContent className="max-h-60 overflow-y-auto">
+                    {batches.map((b) => {
+                      const count = batchCounts[b.id] || 0;
+                      const courseCode = b.courses?.code || "";
+                      const label = `${courseCode ? `[${courseCode}] ` : ""}${b.name}`;
+                      return (
+                        <SelectItem key={b.id} value={b.id}>
+                          <div className="flex items-center justify-between w-full gap-4">
+                            <span>{label}</span>
+                            <span className="text-muted-foreground text-xs font-mono">
+                              ({count} students)
+                            </span>
+                          </div>
+                        </SelectItem>
+                      );
+                    })}
+                  </SelectContent>
+                </Select>
+              </div>
 
-              {/* Multiple Batches Option for Alternate Seating */}
+              {/* Toggle to Merge 2nd Batch for Alternate Seating */}
               {batches.length > 1 && (
-                <div className="pt-1.5 space-y-2">
+                <div className="pt-2 border-t border-border space-y-2.5">
                   <div className="flex items-center justify-between">
                     <Button
                       type="button"
-                      variant="ghost"
+                      variant={showMultipleBatches || form.batchSelections.length > 1 ? "secondary" : "outline"}
                       size="sm"
-                      className="h-7 text-xs text-primary hover:text-primary font-semibold px-2 gap-1.5"
+                      className="h-8 text-xs font-semibold gap-1.5 border-dashed"
                       onClick={() => setShowMultipleBatches((v) => !v)}
                     >
+                      <Shuffle className="size-3.5 text-primary" />
                       {showMultipleBatches || form.batchSelections.length > 1
-                        ? "− Hide additional batches"
-                        : "➕ Combine 2nd Batch for Alternate Seating"}
+                        ? "✓ 2nd Batch Merge Options"
+                        : "➕ Merge 2nd Batch for Alternate Seating"}
                     </Button>
 
                     {form.batchSelections.length >= 2 && (
-                      <Badge className="bg-emerald-500/15 text-emerald-700 dark:text-emerald-400 border-emerald-300 font-mono text-[10px]">
-                        ✓ {form.batchSelections.length} Batches Combined (Alternate Ready)
+                      <Badge className="bg-emerald-500/15 text-emerald-700 dark:text-emerald-400 border-emerald-300 font-medium text-xs">
+                        🔀 Alternate Ready (2 Batches)
                       </Badge>
                     )}
                   </div>
 
                   {(showMultipleBatches || form.batchSelections.length > 1) && (
-                    <div className="rounded-lg border border-primary/25 p-2.5 max-h-40 overflow-y-auto space-y-1.5 bg-background shadow-2xs">
-                      <p className="text-[11px] font-medium text-foreground mb-1">
-                        Select additional batches to sit together in alternating columns (e.g. 2024 ⇄ 2023):
-                      </p>
-                      {batches.map((b) => {
-                        const isChecked = form.batchSelections.some((sel) => sel.batch_id === b.id);
-                        const isPrimary = b.id === primaryBatchId;
-                        const count = batchCounts[b.id] || 0;
-                        const courseCode = b.courses?.code || "";
-                        const label = `${courseCode ? `[${courseCode}] ` : ""}${b.name}`;
-                        return (
-                          <label
-                            key={b.id}
-                            className={`flex items-center justify-between gap-2 p-1.5 rounded transition-colors cursor-pointer text-xs ${
-                              isChecked ? "bg-primary/10 border border-primary/20 font-medium" : "hover:bg-muted/50"
-                            }`}
-                          >
-                            <div className="flex items-center gap-2">
-                              <Checkbox
-                                checked={isChecked}
-                                disabled={isPrimary}
-                                onCheckedChange={() => toggleBatch(b.course_id, b.id)}
-                              />
-                              <span className="text-foreground">
-                                {label} {isPrimary ? "(Primary)" : ""}
-                              </span>
-                            </div>
-                            <span className="font-mono text-muted-foreground text-[11px]">
-                              ({count} students)
+                    <div className="space-y-2 rounded-lg border border-primary/20 bg-primary/5 p-3">
+                      <div className="space-y-1.5">
+                        <span className="text-xs font-medium text-foreground">
+                          Secondary Batch (Column 2, 4, 6... for Alternate Seating)
+                        </span>
+                        <Select
+                          value={secondaryBatchId || "none"}
+                          onValueChange={setSecondaryBatch}
+                        >
+                          <SelectTrigger className="w-full bg-background font-medium h-9 text-xs">
+                            <SelectValue placeholder="-- Select 2nd Batch to Alternate With --" />
+                          </SelectTrigger>
+                          <SelectContent className="max-h-56 overflow-y-auto">
+                            <SelectItem value="none">-- None (Single Batch Only) --</SelectItem>
+                            {batches
+                              .filter((b) => b.id !== primaryBatchId)
+                              .map((b) => {
+                                const count = batchCounts[b.id] || 0;
+                                const courseCode = b.courses?.code || "";
+                                const label = `${courseCode ? `[${courseCode}] ` : ""}${b.name}`;
+                                return (
+                                  <SelectItem key={b.id} value={b.id}>
+                                    <div className="flex items-center justify-between w-full gap-4 text-xs">
+                                      <span>{label}</span>
+                                      <span className="text-muted-foreground font-mono">
+                                        ({count} students)
+                                      </span>
+                                    </div>
+                                  </SelectItem>
+                                );
+                              })}
+                          </SelectContent>
+                        </Select>
+                      </div>
+
+                      {/* Alternate Preview Banner */}
+                      {form.batchSelections.length >= 2 && primaryBatch && secondaryBatch && (
+                        <div className="rounded-lg border border-blue-500/30 bg-blue-500/10 p-3 space-y-2 text-xs">
+                          <div className="flex items-center justify-between">
+                            <span className="font-bold text-blue-700 dark:text-blue-300 flex items-center gap-1.5">
+                              <Shuffle className="size-4" />
+                              Alternate Seating Arrangement Active
                             </span>
-                          </label>
-                        );
-                      })}
-                    </div>
-                  )}
-                </div>
-              )}
-            </div>
+                            <span className="font-mono font-semibold text-blue-800 dark:text-blue-200">
+                              Total: {totalFormStudents} Students
+                            </span>
+                          </div>
 
-            {/* 2. Subject Selection (Strictly Scroll Down Menu with Student Counts) */}
-            <div className="space-y-2 rounded-xl border border-border bg-muted/15 p-3.5">
-              <div className="flex items-center justify-between">
-                <Label htmlFor="subject-name" className="text-xs font-semibold uppercase tracking-wider text-foreground flex items-center gap-1.5">
-                  <BookOpen className="size-3.5 text-primary" />
-                  <span>2. Select Subject (Scroll Down) *</span>
-                </Label>
-                {selectedSubject && (
-                  <Badge variant="outline" className="font-mono text-[11px] bg-primary/10 text-primary border-primary/25">
-                    👥 {effectiveExamStudentCount} Students Enrolled
-                  </Badge>
-                )}
-              </div>
-
-              {!primaryBatchId ? (
-                <div className="rounded-lg border border-dashed border-border bg-background/50 p-4 text-center text-xs text-muted-foreground">
-                  👆 Please select a batch above first — available subjects for this batch will load in the scroll-down menu.
-                </div>
-              ) : (
-                <div className="space-y-2.5">
-                  {/* Clean Scroll-Down Menu */}
-                  <Select
-                    value={
-                      batchSubjects.some((s) => s.name === form.subjectName)
-                        ? form.subjectName
-                        : form.subjectName
-                          ? "__custom__"
-                          : ""
-                    }
-                    onValueChange={(val) => {
-                      if (val === "__custom__") {
-                        setForm((prev) => ({ ...prev, subjectName: "" }));
-                      } else {
-                        setForm((prev) => ({ ...prev, subjectName: val }));
-                      }
-                    }}
-                  >
-                    <SelectTrigger className="w-full bg-background font-medium h-10">
-                      <SelectValue placeholder={`-- Scroll down & select subject (${batchSubjects.length} available) --`} />
-                    </SelectTrigger>
-                    <SelectContent className="max-h-72 overflow-y-auto">
-                      {batchSubjects.length === 0 ? (
-                        <div className="p-3 text-xs text-muted-foreground text-center">
-                          No pre-registered subjects found for this batch. Choose custom option below:
-                        </div>
-                      ) : (
-                        batchSubjects.map((s) => (
-                          <SelectItem key={s.id} value={s.name} className="py-2.5">
-                            <div className="flex items-center justify-between w-full gap-4 text-xs">
-                              <span className="font-medium text-foreground">
-                                {s.label}
+                          <div className="grid grid-cols-2 gap-2 text-xs">
+                            <div className="p-2 rounded bg-background border border-emerald-500/30">
+                              <span className="text-[10px] uppercase font-bold text-emerald-700 dark:text-emerald-400 block">
+                                Column 1, 3, 5...
                               </span>
-                              <span className="font-mono font-semibold text-primary bg-primary/10 px-2 py-0.5 rounded text-[11px] shrink-0">
-                                {s.studentCount} students {s.branchCode ? `(${s.branchCode})` : ""}
+                              <span className="font-semibold text-foreground truncate block">
+                                {primaryBatch.courses?.code} {primaryBatch.name}
+                              </span>
+                              <span className="text-[11px] text-muted-foreground font-mono">
+                                {batchCounts[primaryBatch.id] || 0} students
                               </span>
                             </div>
-                          </SelectItem>
-                        ))
+
+                            <div className="p-2 rounded bg-background border border-sky-500/30">
+                              <span className="text-[10px] uppercase font-bold text-sky-700 dark:text-sky-400 block">
+                                Column 2, 4, 6...
+                              </span>
+                              <span className="font-semibold text-foreground truncate block">
+                                {secondaryBatch.courses?.code} {secondaryBatch.name}
+                              </span>
+                              <span className="text-[11px] text-muted-foreground font-mono">
+                                {batchCounts[secondaryBatch.id] || 0} students
+                              </span>
+                            </div>
+                          </div>
+
+                          <p className="text-[11px] text-muted-foreground flex items-center gap-1">
+                            <span>💡</span>
+                            In exam halls, students will be seated column-wise alternating between these 2 batches.
+                          </p>
+                        </div>
                       )}
-                      <SelectItem value="__custom__" className="text-primary font-semibold border-t border-border mt-1 pt-1.5">
-                        ✏️ + Type custom / other paper name...
-                      </SelectItem>
-                    </SelectContent>
-                  </Select>
-
-                  {/* Input ONLY shown if user explicitly chooses custom paper or no subjects found */}
-                  {(!batchSubjects.some((s) => s.name === form.subjectName) || batchSubjects.length === 0) && (
-                    <div className="space-y-1 pt-1">
-                      <Input
-                        id="subject-name"
-                        placeholder="Type custom subject name (e.g. Thermodynamics, Fluid Mechanics, Web Tech)..."
-                        value={form.subjectName}
-                        onChange={(e) => setForm({ ...form, subjectName: e.target.value })}
-                        className="bg-background text-sm"
-                        autoFocus
-                      />
-                      <p className="text-[11px] text-muted-foreground">
-                        Custom subject / paper name specified.
-                      </p>
                     </div>
                   )}
-
-                  {/* Live Subject & Enrolled Student Count Highlight Card */}
-                  {form.subjectName && (
-                    <div className="rounded-lg border border-primary/25 bg-primary/5 p-3 flex items-center justify-between text-xs">
-                      <div className="space-y-0.5">
-                        <span className="text-[10px] uppercase font-bold tracking-wider text-muted-foreground">
-                          Selected Paper:
-                        </span>
-                        <p className="font-semibold text-foreground text-sm flex items-center gap-1.5">
-                          <span>{form.subjectName}</span>
-                          {selectedSubject?.branchCode && (
-                            <Badge variant="secondary" className="text-[10px] py-0 px-1.5">
-                              {selectedSubject.branchCode}
-                            </Badge>
-                          )}
-                        </p>
-                      </div>
-                      <div className="text-right">
-                        <span className="font-mono font-bold text-primary text-base block">
-                          {effectiveExamStudentCount}
-                        </span>
-                        <span className="text-[10px] text-muted-foreground uppercase font-medium">
-                          Students appearing
-                        </span>
-                      </div>
-                    </div>
-                  )}
-                </div>
-              )}
-            </div>
-
-            {/* 3. Schedule: Date & Session */}
-            <div className="grid gap-3 sm:grid-cols-2">
-              <div className="space-y-1.5">
-                <Label htmlFor="exam-date" className="text-xs font-medium">3. Exam Date *</Label>
-                <Input
-                  id="exam-date"
-                  type="date"
-                  value={form.exam_date}
-                  onChange={(e) => setForm({ ...form, exam_date: e.target.value })}
-                  className="bg-background"
-                />
-              </div>
-
-              <div className="space-y-1.5">
-                <Label className="text-xs font-medium">Session *</Label>
-                <Select
-                  value={form.session}
-                  onValueChange={(val: "morning" | "afternoon" | "evening") =>
-                    setForm({ ...form, session: val })
-                  }
-                >
-                  <SelectTrigger className="bg-background">
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="morning">Morning (09:30 AM - 12:30 PM)</SelectItem>
-                    <SelectItem value="afternoon">Afternoon (01:30 PM - 04:30 PM)</SelectItem>
-                    <SelectItem value="evening">Evening (05:00 PM - 08:00 PM)</SelectItem>
-                  </SelectContent>
-                </Select>
-              </div>
-            </div>
-
-            {/* 4. Category / Folder Selection */}
-            <div className="space-y-2 pt-1 border-t border-border">
-              <Label className="text-xs font-medium text-muted-foreground">Examination Folder / Term</Label>
-              <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
-                {DEFAULT_CATEGORIES.map((cat) => (
-                  <Button
-                    key={cat}
-                    type="button"
-                    variant={form.category === cat ? "default" : "outline"}
-                    size="sm"
-                    className="text-xs h-8"
-                    onClick={() => setForm({ ...form, category: cat })}
-                  >
-                    {cat}
-                  </Button>
-                ))}
-                <Button
-                  type="button"
-                  variant={form.category === "custom" ? "default" : "outline"}
-                  size="sm"
-                  className="text-xs h-8"
-                  onClick={() => setForm({ ...form, category: "custom" })}
-                >
-                  + Custom Folder
-                </Button>
-              </div>
-
-              {form.category === "custom" && (
-                <div className="pt-1">
-                  <Input
-                    placeholder="e.g. Unit Test 1, Practical Examination, Re-Exam..."
-                    value={form.customCategory}
-                    onChange={(e) => setForm({ ...form, customCategory: e.target.value })}
-                    className="text-xs bg-background"
-                  />
                 </div>
               )}
             </div>
