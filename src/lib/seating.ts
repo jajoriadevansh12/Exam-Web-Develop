@@ -627,20 +627,33 @@ export async function saveExamWithBatches(input: {
   return exam;
 }
 
-export async function loadGroupsForDateAndSession(examDate: string, session: string): Promise<{
+export async function loadGroupsForDateAndSession(
+  examDate: string,
+  session: string,
+  targetExamId?: string,
+): Promise<{
   exams: ExamDetailed[];
   groups: SeatingGroup[];
+  distinctBatches?: any[];
   totalStudents: number;
   category: string;
   subjects: string[];
 }> {
   const allDetailed = await listExamsDetailed();
-  const matchedExams = allDetailed.filter(
+  let matchedExams = allDetailed.filter(
     (e) => e.exam_date === examDate && (e.session || "").toLowerCase() === (session || "").toLowerCase(),
   );
 
+  // If a specific subject / exam is selected, filter strictly to that subject's exam
+  if (targetExamId && targetExamId !== "all") {
+    const specific = matchedExams.filter((e) => e.id === targetExamId);
+    if (specific.length > 0) {
+      matchedExams = specific;
+    }
+  }
+
   if (matchedExams.length === 0) {
-    return { exams: [], groups: [], totalStudents: 0, category: "", subjects: [] };
+    return { exams: [], groups: [], distinctBatches: [], totalStudents: 0, category: "", subjects: [] };
   }
 
   const detectedCategories = new Set(matchedExams.map((e) => e.category).filter(Boolean));
@@ -766,9 +779,10 @@ export async function previewSeatingForDate(
     batchB?: string;
     interleaveAllBatches?: boolean;
   },
+  targetExamId?: string,
 ) {
   const [{ groups, distinctBatches }, rooms] = await Promise.all([
-    loadGroupsForDateAndSession(examDate, session),
+    loadGroupsForDateAndSession(examDate, session, targetExamId),
     listRooms(),
   ]);
 
@@ -805,11 +819,19 @@ export async function saveSeatingPlanForDate(
   session: string,
   result: SeatingResult,
   strategy: Strategy,
+  targetExamId?: string,
 ) {
   const allDetailed = await listExamsDetailed();
-  const matchedExams = allDetailed.filter(
+  let matchedExams = allDetailed.filter(
     (e) => e.exam_date === examDate && (e.session || "").toLowerCase() === (session || "").toLowerCase(),
   );
+
+  if (targetExamId && targetExamId !== "all") {
+    const specific = matchedExams.filter((e) => e.id === targetExamId);
+    if (specific.length > 0) {
+      matchedExams = specific;
+    }
+  }
 
   if (matchedExams.length === 0) {
     throw new Error("No scheduled exams found for this date and session.");
@@ -863,7 +885,18 @@ export async function saveSeatingPlanForDate(
   return { success: true, count: result.seated, rooms: result.rooms.length };
 }
 
-export async function getSeatingPlanForDate(examDate: string, session: string) {
+export async function getSeatingPlanForDate(
+  examDate: string,
+  session: string,
+  targetExamId?: string,
+) {
+  if (targetExamId && targetExamId !== "all") {
+    const saved = await getSeatingPlan(targetExamId);
+    if (saved && saved.plan && saved.seats && saved.seats.length > 0) {
+      return saved;
+    }
+  }
+
   const allDetailed = await listExamsDetailed();
   const matchedExams = allDetailed.filter(
     (e) => e.exam_date === examDate && (e.session || "").toLowerCase() === (session || "").toLowerCase(),

@@ -198,6 +198,40 @@ function ExamsPage() {
     return list;
   }, [primaryBatch, allSubjects, exams]);
 
+  // Available subjects for the selected batch or all courses with exact student counts
+  const batchSubjects = useMemo(() => {
+    let source = allSubjects;
+    if (primaryBatch) {
+      const filtered = allSubjects.filter((s) => {
+        if (s.batch_id && s.batch_id === primaryBatch.id) return true;
+        if (!s.batch_id && s.course_id === primaryBatch.course_id) return true;
+        if (s.batches?.name && s.batches.name.toLowerCase() === primaryBatch.name.toLowerCase()) return true;
+        return false;
+      });
+      if (filtered.length > 0) source = filtered;
+    }
+
+    return source.map((s) => {
+      const count =
+        subjectCountData.bySubjectId[s.id] ??
+        (s.course_id && primaryBatch ? subjectCountData.byCourseAndBatch[`${s.course_id}_${primaryBatch.id}`] : null) ??
+        (primaryBatch ? batchCounts[primaryBatch.id] : 0) ??
+        0;
+
+      const branchCode = s.courses?.code || "";
+      const codePrefix = s.code ? `[${s.code}] ` : "";
+
+      return {
+        id: s.id,
+        code: s.code || "",
+        name: s.name,
+        studentCount: count,
+        branchCode,
+        label: `${codePrefix}${s.name}`,
+      };
+    });
+  }, [allSubjects, primaryBatch, subjectCountData, batchCounts]);
+
   // Collect distinct categories from both defaults and existing exams
   const allCategories = useMemo(() => {
     const set = new Set<string>(DEFAULT_CATEGORIES);
@@ -760,19 +794,55 @@ function ExamsPage() {
                 )}
               </div>
 
-              <div className="space-y-1.5">
+              <div className="space-y-2">
+                {/* Scroll-down select menu from registered subjects */}
+                <Select
+                  value={
+                    batchSubjects.some((s) => s.name === form.subjectName)
+                      ? form.subjectName
+                      : form.subjectName
+                        ? "__custom__"
+                        : ""
+                  }
+                  onValueChange={(val) => {
+                    if (val === "__custom__") {
+                      setForm((prev) => ({ ...prev, subjectName: "" }));
+                    } else {
+                      setForm((prev) => ({ ...prev, subjectName: val }));
+                    }
+                  }}
+                >
+                  <SelectTrigger className="w-full bg-background font-medium h-9 text-xs">
+                    <SelectValue placeholder={`-- Scroll down & select subject (${batchSubjects.length > 0 ? `${batchSubjects.length} subjects found` : "choose from list or type below"} ) --`} />
+                  </SelectTrigger>
+                  <SelectContent className="max-h-64 overflow-y-auto">
+                    {batchSubjects.map((s) => (
+                      <SelectItem key={s.id} value={s.name} className="py-1.5 text-xs">
+                        <div className="flex items-center justify-between w-full gap-3">
+                          <span className="font-semibold text-foreground">{s.label}</span>
+                          <span className="font-mono text-primary bg-primary/10 px-1.5 py-0.5 rounded text-[10px] shrink-0 font-medium">
+                            {s.studentCount} students {s.branchCode ? `(${s.branchCode})` : ""}
+                          </span>
+                        </div>
+                      </SelectItem>
+                    ))}
+                    <SelectItem value="__custom__" className="text-primary font-semibold border-t border-border mt-1 pt-1 text-xs">
+                      ✏️ + Type other / custom paper name...
+                    </SelectItem>
+                  </SelectContent>
+                </Select>
+
                 <Input
                   id="exam-subject-name"
-                  placeholder="Type exam or paper name (e.g. Data Structures, Applied Physics, Mathematics)..."
+                  placeholder="Or type/edit exam or paper name directly..."
                   value={form.subjectName}
                   onChange={(e) => setForm({ ...form, subjectName: e.target.value })}
-                  className="bg-background text-sm h-10 font-medium"
-                  autoFocus
+                  className="bg-background text-sm h-9 font-medium"
                 />
 
                 {/* Quick Click Suggestions */}
                 {popularSubjects.length > 0 && (
-                  <div className="flex flex-wrap items-center gap-1.5 pt-1">
+                  <div className="flex flex-wrap items-center gap-1.5 pt-0.5">
                     <span className="text-[11px] font-medium text-muted-foreground mr-1">
                       Suggestions:
                     </span>

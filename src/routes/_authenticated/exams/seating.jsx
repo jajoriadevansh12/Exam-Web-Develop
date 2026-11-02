@@ -155,16 +155,35 @@ function SeatingPage() {
     }
   }, [selectedDate, scheduledSessions]);
 
-  // Load sitting data and groups for the selected Date and Session
+  // Scheduled exams strictly on the chosen Date & Session
+  const examsInCurrentSlot = useMemo(() => {
+    if (!selectedDate || !selectedSession) return [];
+    return detailedExams.filter(
+      (e) =>
+        e.exam_date === selectedDate &&
+        (e.session || "morning").toLowerCase() === selectedSession.toLowerCase()
+    );
+  }, [detailedExams, selectedDate, selectedSession]);
+
+  // Keep selectedExamId valid for current slot
+  useEffect(() => {
+    if (examsInCurrentSlot.length > 0) {
+      if (!selectedExamId || (selectedExamId !== "all" && !examsInCurrentSlot.some((e) => e.id === selectedExamId))) {
+        setSelectedExamId(examsInCurrentSlot[0].id);
+      }
+    }
+  }, [examsInCurrentSlot, selectedExamId]);
+
+  // Load sitting data and groups for the selected Date, Session and Exam
   const { data: sittingData } = useQuery({
-    queryKey: ["sitting_by_date", selectedDate, selectedSession],
-    queryFn: () => loadGroupsForDateAndSession(selectedDate, selectedSession),
+    queryKey: ["sitting_by_date", selectedDate, selectedSession, selectedExamId],
+    queryFn: () => loadGroupsForDateAndSession(selectedDate, selectedSession, selectedExamId),
     enabled: Boolean(selectedDate && selectedSession),
   });
 
   const { data: saved } = useQuery({
-    queryKey: ["saved_plan_by_date", selectedDate, selectedSession],
-    queryFn: () => getSeatingPlanForDate(selectedDate, selectedSession),
+    queryKey: ["saved_plan_by_date", selectedDate, selectedSession, selectedExamId],
+    queryFn: () => getSeatingPlanForDate(selectedDate, selectedSession, selectedExamId),
     enabled: Boolean(selectedDate && selectedSession),
   });
 
@@ -429,10 +448,18 @@ function SeatingPage() {
       if (targetRoomIds.length === 0) {
         throw new Error("Please select at least one examination hall.");
       }
-      return previewSeatingForDate(selectedDate, selectedSession, targetRoomIds, strategy, "pack_rooms", {
-        batchA: alternateBatchA,
-        batchB: alternateBatchB,
-      });
+      return previewSeatingForDate(
+        selectedDate,
+        selectedSession,
+        targetRoomIds,
+        strategy,
+        "pack_rooms",
+        {
+          batchA: alternateBatchA,
+          batchB: alternateBatchB,
+        },
+        selectedExamId,
+      );
     },
     onSuccess: (result) => {
       setPreview(result);
@@ -467,13 +494,15 @@ function SeatingPage() {
   const savePlan = useMutation({
     mutationFn: () => {
       if (!preview) throw new Error("No seating plan preview to save.");
-      return saveSeatingPlanForDate(selectedDate, selectedSession, preview, strategy);
+      return saveSeatingPlanForDate(selectedDate, selectedSession, preview, strategy, selectedExamId);
     },
     onSuccess: () => {
       toast.success("✓ Seating plan verified and permanently saved to database!");
       setPreview(null);
-      qc.invalidateQueries({ queryKey: ["saved_plan_by_date", selectedDate, selectedSession] });
+      qc.invalidateQueries({ queryKey: ["saved_plan_by_date", selectedDate, selectedSession, selectedExamId] });
+      qc.invalidateQueries({ queryKey: ["sitting_by_date", selectedDate, selectedSession, selectedExamId] });
       qc.invalidateQueries({ queryKey: ["seating_plans"] });
+      qc.invalidateQueries({ queryKey: ["exams_detailed"] });
       qc.invalidateQueries({ queryKey: ["duties", examId] });
     },
     onError: (e) => toast.error("Failed to save seating plan: " + e.message),
@@ -636,6 +665,19 @@ function SeatingPage() {
 
   // Switch Exam by Subject / Paper selection
   const handleSelectExamByPaper = (examObjId) => {
+    if (examObjId === "all") {
+      setSelectedExamId("all");
+      setPreview(null);
+      void navigate({
+        to: "/exams/seating",
+        search: {
+          examId: "all",
+          date: selectedDate,
+          session: selectedSession,
+        },
+      });
+      return;
+    }
     const found = detailedExams.find((e) => e.id === examObjId);
     if (found) {
       setSelectedExamId(found.id);
@@ -753,12 +795,17 @@ function SeatingPage() {
                   </Badge>
                 </div>
 
-                {/* Subject / Paper Quick Pick Dropdown */}
+                {/* Subject / Paper Selection Dropdown (Only for Selected Subject) */}
                 <div className="space-y-1.5">
                   <Label className="text-xs font-semibold text-foreground flex items-center justify-between">
-                    <span>Select Scheduled Subject / Exam:</span>
-                    {detailedExams.length > 0 && (
-                      <span className="text-[10px] text-muted-foreground">{detailedExams.length} scheduled</span>
+                    <span className="flex items-center gap-1.5">
+                      <BookOpen className="size-3.5 text-primary" />
+                      <span>Select Subject / Exam for Seating:</span>
+                    </span>
+                    {examsInCurrentSlot.length > 0 && (
+                      <Badge variant="outline" className="text-[10px] text-primary border-primary/30">
+                        {examsInCurrentSlot.length} Subject(s) Available
+                      </Badge>
                     )}
                   </Label>
                   {detailedExams.length === 0 ? (
@@ -770,25 +817,65 @@ function SeatingPage() {
                     </div>
                   ) : (
                     <Select
-                      value={selectedExamId || (scheduledExams[0]?.id || "")}
+                      value={selectedExamId || (examsInCurrentSlot[0]?.id || "")}
                       onValueChange={(val) => handleSelectExamByPaper(val)}
                     >
-                      <SelectTrigger className="w-full text-xs h-9 bg-card">
+                      <SelectTrigger className="w-full text-xs h-9 bg-card font-medium">
                         <SelectValue placeholder="Choose Subject / Paper..." />
                       </SelectTrigger>
                       <SelectContent>
-                        {detailedExams.map((e) => (
-                          <SelectItem key={e.id} value={e.id} className="text-xs py-1.5">
-                            <div className="flex flex-col text-left">
-                              <span className="font-semibold text-foreground">
-                                {e.subjectName || e.name}
-                              </span>
-                              <span className="text-[10px] text-muted-foreground">
-                                {e.exam_date} · {e.session} · {e.totalStudents} students
-                              </span>
+                        {examsInCurrentSlot.length > 0 && (
+                          <>
+                            <div className="px-2 py-1 text-[10px] font-bold uppercase tracking-wider text-muted-foreground">
+                              Subjects Scheduled on {selectedDate} ({selectedSession}):
                             </div>
-                          </SelectItem>
-                        ))}
+                            {examsInCurrentSlot.map((e) => (
+                              <SelectItem key={e.id} value={e.id} className="text-xs py-1.5">
+                                <div className="flex flex-col text-left">
+                                  <span className="font-semibold text-foreground flex items-center gap-1.5">
+                                    {e.subjectName || e.name}
+                                    {e.groups.length > 1 && (
+                                      <span className="text-[10px] text-blue-600 dark:text-blue-400 bg-blue-500/15 border border-blue-500/30 px-1.5 rounded">
+                                        🔀 Alternate ({e.groups.length} Batches)
+                                      </span>
+                                    )}
+                                  </span>
+                                  <span className="text-[10px] text-muted-foreground font-mono">
+                                    Batches: {e.groups.map(g => `${g.courses?.code || ""} ${g.batches?.name || ""}`).join(", ")} · {e.totalStudents} students
+                                  </span>
+                                </div>
+                              </SelectItem>
+                            ))}
+                            {examsInCurrentSlot.length > 1 && (
+                              <SelectItem value="all" className="text-xs py-1.5 font-semibold text-primary border-t border-border mt-1">
+                                🌐 All Subjects Combined ({examsInCurrentSlot.length} papers in this slot)
+                              </SelectItem>
+                            )}
+                          </>
+                        )}
+
+                        {/* Other dates/sessions */}
+                        {detailedExams.filter(e => !examsInCurrentSlot.some(curr => curr.id === e.id)).length > 0 && (
+                          <>
+                            <div className="px-2 py-1 text-[10px] font-bold uppercase tracking-wider text-muted-foreground border-t border-border mt-1 pt-1.5">
+                              Other Scheduled Dates &amp; Sessions:
+                            </div>
+                            {detailedExams
+                              .filter(e => !examsInCurrentSlot.some(curr => curr.id === e.id))
+                              .map((e) => (
+                                <SelectItem key={e.id} value={e.id} className="text-xs py-1.5">
+                                  <div className="flex flex-col text-left">
+                                    <span className="font-medium text-foreground">
+                                      {e.subjectName || e.name}
+                                    </span>
+                                    <span className="text-[10px] text-muted-foreground">
+                                      {e.exam_date} · {e.session} · {e.totalStudents} students
+                                    </span>
+                                  </div>
+                                </SelectItem>
+                              ))}
+                          </>
+                        )}
                       </SelectContent>
                     </Select>
                   )}
