@@ -45,7 +45,7 @@ import {
 } from "@/components/ui/select";
 import { Skeleton } from "@/components/ui/skeleton";
 import { listBatches, listCourses } from "@/lib/db";
-import { getDetailedSubjectStudentCounts, listSubjects } from "@/lib/subjects";
+import { getDetailedSubjectStudentCounts, listSubjects, type Subject } from "@/lib/subjects";
 import {
   deleteExam,
   getBatchStudentCounts,
@@ -162,15 +162,29 @@ function ExamsPage() {
 
   const secondaryBatchId = secondaryBatch?.id || "";
 
-  // Strictly filter subjects to the selected course and batch year
+  // Helper to check if a subject strictly belongs to a specific batch
+  const isSubjectForBatch = (s: Subject, targetBatch: typeof primaryBatch) => {
+    if (!targetBatch) return false;
+    // 1. Direct match on batch_id
+    if (s.batch_id && s.batch_id === targetBatch.id) {
+      return true;
+    }
+    // 2. Direct match on batch name (case-insensitive)
+    if (s.batches?.name && s.batches.name.trim().toLowerCase() === targetBatch.name.trim().toLowerCase()) {
+      return true;
+    }
+    // 3. Fallback: only if the subject has NO batch assigned at all (s.batch_id is null/empty)
+    // AND it matches the course_id of the batch
+    if (!s.batch_id && !s.batches?.name && s.course_id && s.course_id === targetBatch.course_id) {
+      return true;
+    }
+    return false;
+  };
+
+  // Strictly filter subjects to the selected primary course and batch year
   const batchSubjects = useMemo(() => {
     if (!primaryBatch) return [];
-    const filtered = allSubjects.filter((s) => {
-      if (s.batch_id && s.batch_id === primaryBatch.id) return true;
-      if (s.course_id && s.course_id === primaryBatch.course_id) return true;
-      if (s.batches?.name && s.batches.name.toLowerCase() === primaryBatch.name.toLowerCase()) return true;
-      return false;
-    });
+    const filtered = allSubjects.filter((s) => isSubjectForBatch(s, primaryBatch));
 
     return filtered.map((s) => {
       const count =
@@ -187,23 +201,46 @@ function ExamsPage() {
         name: s.name,
         studentCount: count,
         branchCode,
+        batchName: primaryBatch.name,
         label: `${codePrefix}${s.name}`,
       };
     });
   }, [allSubjects, primaryBatch, subjectCountData, batchCounts]);
 
-  // Subject suggestions for 1-click select (strictly matching the chosen course & batch)
+  // Strictly filter subjects for secondary batch (if alternate seating merge is active)
+  const secondaryBatchSubjects = useMemo(() => {
+    if (!secondaryBatch) return [];
+    const filtered = allSubjects.filter((s) => isSubjectForBatch(s, secondaryBatch));
+
+    return filtered.map((s) => {
+      const count =
+        subjectCountData.bySubjectId[s.id] ??
+        (s.course_id ? subjectCountData.byCourseAndBatch[`${s.course_id}_${secondaryBatch.id}`] : null) ??
+        (batchCounts[secondaryBatch.id] || 0);
+
+      const branchCode = s.courses?.code || "";
+      const codePrefix = s.code ? `[${s.code}] ` : "";
+
+      return {
+        id: s.id,
+        code: s.code || "",
+        name: s.name,
+        studentCount: count,
+        branchCode,
+        batchName: secondaryBatch.name,
+        label: `${codePrefix}${s.name}`,
+      };
+    });
+  }, [allSubjects, secondaryBatch, subjectCountData, batchCounts]);
+
+  // Subject suggestions for 1-click select (strictly matching the primary batch)
   const popularSubjects = useMemo(() => {
     if (!primaryBatch) return [];
     const seen = new Set<string>();
     const list: string[] = [];
 
     for (const s of allSubjects) {
-      if (
-        (s.batch_id && s.batch_id === primaryBatch.id) ||
-        (s.course_id && s.course_id === primaryBatch.course_id) ||
-        (s.batches?.name && s.batches.name.toLowerCase() === primaryBatch.name.toLowerCase())
-      ) {
+      if (isSubjectForBatch(s, primaryBatch)) {
         const n = s.name.trim();
         if (n && !seen.has(n.toLowerCase())) {
           seen.add(n.toLowerCase());
@@ -214,6 +251,25 @@ function ExamsPage() {
 
     return list;
   }, [primaryBatch, allSubjects]);
+
+  // Subject suggestions for 1-click select (strictly matching the secondary batch)
+  const secondaryPopularSubjects = useMemo(() => {
+    if (!secondaryBatch) return [];
+    const seen = new Set<string>();
+    const list: string[] = [];
+
+    for (const s of allSubjects) {
+      if (isSubjectForBatch(s, secondaryBatch)) {
+        const n = s.name.trim();
+        if (n && !seen.has(n.toLowerCase())) {
+          seen.add(n.toLowerCase());
+          list.push(n);
+        }
+      }
+    }
+
+    return list;
+  }, [secondaryBatch, allSubjects]);
 
   // Collect distinct categories from both defaults and existing exams
   const allCategories = useMemo(() => {
@@ -947,7 +1003,8 @@ function ExamsPage() {
                 <div className="space-y-2">
                   <Select
                     value={
-                      batchSubjects.some((s) => s.name === form.subjectName)
+                      batchSubjects.some((s) => s.name === form.subjectName) ||
+                      secondaryBatchSubjects.some((s) => s.name === form.subjectName)
                         ? form.subjectName
                         : form.subjectName
                           ? "__custom__"
@@ -965,22 +1022,47 @@ function ExamsPage() {
                       <SelectValue
                         placeholder={
                           batchSubjects.length > 0
-                            ? `-- Select Subject for ${primaryBatch.courses?.code || ""} ${primaryBatch.name} (${batchSubjects.length} found) --`
-                            : "-- No subjects found. Type custom name below --"
+                            ? `-- Select Subject for ${primaryBatch.courses?.code || ""} ${primaryBatch.name} (${batchSubjects.length} subjects found) --`
+                            : `-- No subjects found for ${primaryBatch.name}. Type custom paper name below --`
                         }
                       />
                     </SelectTrigger>
                     <SelectContent className="max-h-64 overflow-y-auto">
-                      {batchSubjects.map((s) => (
-                        <SelectItem key={s.id} value={s.name} className="py-1.5 text-xs">
-                          <div className="flex items-center justify-between w-full gap-3">
-                            <span className="font-semibold text-foreground">{s.label}</span>
-                            <span className="font-mono text-primary bg-primary/10 px-1.5 py-0.5 rounded text-[10px] shrink-0 font-medium">
-                              {s.studentCount} students {s.branchCode ? `(${s.branchCode})` : ""}
-                            </span>
+                      {batchSubjects.length > 0 ? (
+                        batchSubjects.map((s) => (
+                          <SelectItem key={s.id} value={s.name} className="py-1.5 text-xs">
+                            <div className="flex items-center justify-between w-full gap-3">
+                              <span className="font-semibold text-foreground">{s.label}</span>
+                              <span className="font-mono text-primary bg-primary/10 px-1.5 py-0.5 rounded text-[10px] shrink-0 font-medium">
+                                {s.studentCount} students {s.branchCode ? `(${s.branchCode})` : ""}
+                              </span>
+                            </div>
+                          </SelectItem>
+                        ))
+                      ) : (
+                        <div className="p-2 text-xs text-muted-foreground text-center italic">
+                          No subjects registered for {primaryBatch.name}
+                        </div>
+                      )}
+
+                      {secondaryBatch && secondaryBatchSubjects.length > 0 && (
+                        <>
+                          <div className="px-2 py-1.5 text-[10px] font-bold text-muted-foreground uppercase tracking-wider bg-muted/60 border-y border-border mt-1">
+                            2nd Batch ({secondaryBatch.courses?.code || ""} {secondaryBatch.name}) Papers:
                           </div>
-                        </SelectItem>
-                      ))}
+                          {secondaryBatchSubjects.map((s) => (
+                            <SelectItem key={s.id} value={s.name} className="py-1.5 text-xs">
+                              <div className="flex items-center justify-between w-full gap-3">
+                                <span className="font-semibold text-foreground">{s.label}</span>
+                                <span className="font-mono text-muted-foreground bg-muted px-1.5 py-0.5 rounded text-[10px] shrink-0 font-medium">
+                                  {s.studentCount} students
+                                </span>
+                              </div>
+                            </SelectItem>
+                          ))}
+                        </>
+                      )}
+
                       <SelectItem value="__custom__" className="text-primary font-semibold border-t border-border mt-1 pt-1 text-xs">
                         ✏️ + Type other / custom paper name...
                       </SelectItem>
@@ -998,9 +1080,31 @@ function ExamsPage() {
                   {popularSubjects.length > 0 && (
                     <div className="flex flex-wrap items-center gap-1.5 pt-0.5">
                       <span className="text-[11px] font-medium text-muted-foreground mr-1">
-                        Batch Papers:
+                        {primaryBatch.name} Papers:
                       </span>
                       {popularSubjects.map((sName) => (
+                        <button
+                          key={sName}
+                          type="button"
+                          onClick={() => setForm((prev) => ({ ...prev, subjectName: sName }))}
+                          className={`text-[11px] px-2 py-0.5 rounded-md border transition-all ${
+                            form.subjectName.toLowerCase() === sName.toLowerCase()
+                              ? "bg-primary text-primary-foreground border-primary font-semibold shadow-xs"
+                              : "bg-background hover:bg-muted text-foreground border-border"
+                          }`}
+                        >
+                          {sName}
+                        </button>
+                      ))}
+                    </div>
+                  )}
+
+                  {secondaryBatch && secondaryPopularSubjects.length > 0 && (
+                    <div className="flex flex-wrap items-center gap-1.5 pt-0.5">
+                      <span className="text-[11px] font-medium text-muted-foreground mr-1">
+                        {secondaryBatch.name} Papers:
+                      </span>
+                      {secondaryPopularSubjects.map((sName) => (
                         <button
                           key={sName}
                           type="button"
