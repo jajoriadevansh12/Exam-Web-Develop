@@ -778,6 +778,8 @@ export async function previewSeatingForDate(
     batchA?: string;
     batchB?: string;
     interleaveAllBatches?: boolean;
+    mode?: "single" | "alternate";
+    selectedBatch?: string;
   },
   targetExamId?: string,
 ) {
@@ -786,12 +788,42 @@ export async function previewSeatingForDate(
     listRooms(),
   ]);
 
+  let activeGroups = groups;
+  let effectiveStrategy = strategy;
+
+  // Single batch in room mode
+  if (alternateOptions?.mode === "single" || strategy === "simple") {
+    effectiveStrategy = "simple";
+    const targetBatch = alternateOptions?.selectedBatch || alternateOptions?.batchA;
+    if (targetBatch && targetBatch !== "ALL_BATCHES") {
+      const filtered = groups.filter((g: any) =>
+        matchesBatchOrGroup({ label: g.label, batch_id: g.batch_id, course_id: g.course_id, exam_id: g.exam_id }, targetBatch)
+      );
+      if (filtered.length > 0) {
+        activeGroups = filtered;
+      }
+    }
+  } else if (effectiveStrategy === "alternate" || effectiveStrategy === "alternate_columns") {
+    // Two different batches / courses mode
+    const bA = alternateOptions?.batchA;
+    const bB = alternateOptions?.batchB;
+    if (bA && bB && bA !== bB) {
+      const filtered = groups.filter((g: any) =>
+        matchesBatchOrGroup({ label: g.label, batch_id: g.batch_id, course_id: g.course_id, exam_id: g.exam_id }, bA) ||
+        matchesBatchOrGroup({ label: g.label, batch_id: g.batch_id, course_id: g.course_id, exam_id: g.exam_id }, bB)
+      );
+      if (filtered.length > 0) {
+        activeGroups = filtered;
+      }
+    }
+  }
+
   // STRICT RULE: Alternation is NEVER allowed with the same batch!
   // If fewer than 2 distinct batches exist, force Simple strategy.
-  let effectiveStrategy = strategy;
+  const uniqueBatchesCount = new Set(activeGroups.map((g: any) => g.batch_id || g.label)).size;
   if (
     (effectiveStrategy === "alternate" || effectiveStrategy === "alternate_columns" || effectiveStrategy === "alternate_rows") &&
-    (distinctBatches?.length ?? 0) < 2
+    uniqueBatchesCount < 2
   ) {
     effectiveStrategy = "simple";
   }
@@ -806,7 +838,7 @@ export async function previewSeatingForDate(
       seats_per_row: room.seats_per_row,
     }));
 
-  return buildSeatingPlan(groups, shapes, effectiveStrategy, {
+  return buildSeatingPlan(activeGroups, shapes, effectiveStrategy, {
     fillMode,
     alternateBatchA: alternateOptions?.batchA,
     alternateBatchB: alternateOptions?.batchB,

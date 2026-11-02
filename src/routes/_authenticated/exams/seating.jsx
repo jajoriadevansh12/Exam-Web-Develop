@@ -197,6 +197,8 @@ function SeatingPage() {
 
   const [selectedRooms, setSelectedRooms] = useState([]);
   const [strategy, setStrategy] = useState("alternate");
+  const [seatingMode, setSeatingMode] = useState("alternate"); // "single" | "alternate"
+  const [selectedSingleBatch, setSelectedSingleBatch] = useState("ALL_BATCHES");
   const [alternateBatchA, setAlternateBatchA] = useState("");
   const [alternateBatchB, setAlternateBatchB] = useState("");
   const [roomFilter, setRoomFilter] = useState("");
@@ -216,12 +218,7 @@ function SeatingPage() {
   const activeRooms = rooms.filter((r) => r.is_active);
 
   const distinctBatches = sittingData?.distinctBatches ?? [];
-  const isAlternationAllowed = distinctBatches.length >= 2;
-
-  // Batches available in this exam sitting for alternate merging
-  // STRICT RULE: Alternation requires 2+ DISTINCT batches! Never allow same batch alternation!
-  const availableBatchOptions = useMemo(() => {
-    if (distinctBatches.length < 2) return [];
+  const allBatchOptionsInSlot = useMemo(() => {
     return distinctBatches.map((b) => ({
       value: b.batch_id || b.key || b.label,
       key: b.key,
@@ -234,6 +231,9 @@ function SeatingPage() {
       exam_id: b.exam_id,
     }));
   }, [distinctBatches]);
+
+  const isAlternationAllowed = allBatchOptionsInSlot.length >= 2;
+  const availableBatchOptions = allBatchOptionsInSlot;
 
   const batchAName = useMemo(() => {
     const opt = availableBatchOptions.find((b) => b.value === alternateBatchA);
@@ -290,31 +290,36 @@ function SeatingPage() {
     get: (label) => getBatchPalette(label),
   }), [alternateBatchA, alternateBatchB, availableBatchOptions]);
 
-  // Default to simple strategy if fewer than 2 distinct batches exist
+  // Sync mode and strategy
   useEffect(() => {
-    if (!isAlternationAllowed && strategy !== "simple") {
+    if (!isAlternationAllowed) {
+      setSeatingMode("single");
       setStrategy("simple");
-    } else if (isAlternationAllowed && strategy === "simple" && distinctBatches.length >= 2) {
-      setStrategy("alternate");
+    } else {
+      if (seatingMode === "alternate") {
+        setStrategy("alternate");
+      } else {
+        setStrategy("simple");
+      }
     }
-  }, [isAlternationAllowed, distinctBatches.length]);
+  }, [isAlternationAllowed, seatingMode]);
 
   // Auto-populate Batch A and Batch B when 2+ distinct batches exist
   useEffect(() => {
-    if (availableBatchOptions.length >= 2) {
-      const first = availableBatchOptions[0].value;
-      const second = availableBatchOptions[1].value;
-      if (!alternateBatchA || !availableBatchOptions.some((b) => b.value === alternateBatchA)) {
+    if (allBatchOptionsInSlot.length >= 2) {
+      const first = allBatchOptionsInSlot[0].value;
+      const second = allBatchOptionsInSlot[1].value;
+      if (!alternateBatchA || !allBatchOptionsInSlot.some((b) => b.value === alternateBatchA)) {
         setAlternateBatchA(first);
       }
-      if (!alternateBatchB || !availableBatchOptions.some((b) => b.value === alternateBatchB) || alternateBatchB === first) {
+      if (!alternateBatchB || !allBatchOptionsInSlot.some((b) => b.value === alternateBatchB) || alternateBatchB === first) {
         setAlternateBatchB(second);
       }
     } else {
       setAlternateBatchA("");
       setAlternateBatchB("");
     }
-  }, [availableBatchOptions, alternateBatchA, alternateBatchB]);
+  }, [allBatchOptionsInSlot, alternateBatchA, alternateBatchB]);
 
   // Auto-select active rooms to fit totalStudents or sync with saved plan
   useEffect(() => {
@@ -452,9 +457,11 @@ function SeatingPage() {
         selectedDate,
         selectedSession,
         targetRoomIds,
-        strategy,
+        seatingMode === "alternate" ? "alternate" : "simple",
         "pack_rooms",
         {
+          mode: seatingMode,
+          selectedBatch: selectedSingleBatch,
           batchA: alternateBatchA,
           batchB: alternateBatchB,
         },
@@ -494,7 +501,13 @@ function SeatingPage() {
   const savePlan = useMutation({
     mutationFn: () => {
       if (!preview) throw new Error("No seating plan preview to save.");
-      return saveSeatingPlanForDate(selectedDate, selectedSession, preview, strategy, selectedExamId);
+      return saveSeatingPlanForDate(
+        selectedDate,
+        selectedSession,
+        preview,
+        seatingMode === "alternate" ? "alternate" : "simple",
+        selectedExamId,
+      );
     },
     onSuccess: () => {
       toast.success("✓ Seating plan verified and permanently saved to database!");
@@ -778,16 +791,16 @@ function SeatingPage() {
             {/* LEFT COLUMN: EXAMINATION DETAILS & SETUP (lg:col-span-4)              */}
             {/* --------------------------------------------------------------------- */}
             <div className="lg:col-span-4 xl:col-span-4 space-y-4">
-              {/* Card 1: Exam & Subject Selection */}
+              {/* Card 1: Exam Date & Scheduled Papers Selection (Step 1) */}
               <div className="panel p-4 space-y-4 bg-card border-border shadow-xs">
                 <div className="flex items-center justify-between border-b border-border pb-2.5">
                   <div className="flex items-center gap-2">
                     <div className="p-1.5 rounded-md bg-primary/10 text-primary">
-                      <BookOpen className="size-4" />
+                      <Calendar className="size-4" />
                     </div>
                     <div>
-                      <h3 className="font-bold text-sm text-foreground">Examination Details</h3>
-                      <p className="text-[11px] text-muted-foreground">Select subject, date &amp; session</p>
+                      <h3 className="font-bold text-sm text-foreground">1. Examination Date &amp; Session</h3>
+                      <p className="text-[11px] text-muted-foreground">Select date first to view its scheduled papers</p>
                     </div>
                   </div>
                   <Badge variant="outline" className="text-[10px] font-semibold text-primary border-primary/30">
@@ -795,96 +808,13 @@ function SeatingPage() {
                   </Badge>
                 </div>
 
-                {/* Subject / Paper Selection Dropdown (Only for Selected Subject) */}
-                <div className="space-y-1.5">
-                  <Label className="text-xs font-semibold text-foreground flex items-center justify-between">
-                    <span className="flex items-center gap-1.5">
-                      <BookOpen className="size-3.5 text-primary" />
-                      <span>Select Subject / Exam for Seating:</span>
-                    </span>
-                    {examsInCurrentSlot.length > 0 && (
-                      <Badge variant="outline" className="text-[10px] text-primary border-primary/30">
-                        {examsInCurrentSlot.length} Subject(s) Available
-                      </Badge>
-                    )}
-                  </Label>
-                  {detailedExams.length === 0 ? (
-                    <div className="p-2.5 rounded-lg border border-dashed border-border bg-muted/20 text-center space-y-1.5">
-                      <p className="text-xs text-muted-foreground">No scheduled exams found.</p>
-                      <Link to="/exams" className="text-xs font-semibold text-primary hover:underline inline-flex items-center gap-1">
-                        + Schedule Examination in Manager →
-                      </Link>
-                    </div>
-                  ) : (
-                    <Select
-                      value={selectedExamId || (examsInCurrentSlot[0]?.id || "")}
-                      onValueChange={(val) => handleSelectExamByPaper(val)}
-                    >
-                      <SelectTrigger className="w-full text-xs h-9 bg-card font-medium">
-                        <SelectValue placeholder="Choose Subject / Paper..." />
-                      </SelectTrigger>
-                      <SelectContent>
-                        {examsInCurrentSlot.length > 0 && (
-                          <>
-                            <div className="px-2 py-1 text-[10px] font-bold uppercase tracking-wider text-muted-foreground">
-                              Subjects Scheduled on {selectedDate} ({selectedSession}):
-                            </div>
-                            {examsInCurrentSlot.map((e) => (
-                              <SelectItem key={e.id} value={e.id} className="text-xs py-1.5">
-                                <div className="flex flex-col text-left">
-                                  <span className="font-semibold text-foreground flex items-center gap-1.5">
-                                    {e.subjectName || e.name}
-                                    {e.groups.length > 1 && (
-                                      <span className="text-[10px] text-blue-600 dark:text-blue-400 bg-blue-500/15 border border-blue-500/30 px-1.5 rounded">
-                                        🔀 Alternate ({e.groups.length} Batches)
-                                      </span>
-                                    )}
-                                  </span>
-                                  <span className="text-[10px] text-muted-foreground font-mono">
-                                    Batches: {e.groups.map(g => `${g.courses?.code || ""} ${g.batches?.name || ""}`).join(", ")} · {e.totalStudents} students
-                                  </span>
-                                </div>
-                              </SelectItem>
-                            ))}
-                            {examsInCurrentSlot.length > 1 && (
-                              <SelectItem value="all" className="text-xs py-1.5 font-semibold text-primary border-t border-border mt-1">
-                                🌐 All Subjects Combined ({examsInCurrentSlot.length} papers in this slot)
-                              </SelectItem>
-                            )}
-                          </>
-                        )}
-
-                        {/* Other dates/sessions */}
-                        {detailedExams.filter(e => !examsInCurrentSlot.some(curr => curr.id === e.id)).length > 0 && (
-                          <>
-                            <div className="px-2 py-1 text-[10px] font-bold uppercase tracking-wider text-muted-foreground border-t border-border mt-1 pt-1.5">
-                              Other Scheduled Dates &amp; Sessions:
-                            </div>
-                            {detailedExams
-                              .filter(e => !examsInCurrentSlot.some(curr => curr.id === e.id))
-                              .map((e) => (
-                                <SelectItem key={e.id} value={e.id} className="text-xs py-1.5">
-                                  <div className="flex flex-col text-left">
-                                    <span className="font-medium text-foreground">
-                                      {e.subjectName || e.name}
-                                    </span>
-                                    <span className="text-[10px] text-muted-foreground">
-                                      {e.exam_date} · {e.session} · {e.totalStudents} students
-                                    </span>
-                                  </div>
-                                </SelectItem>
-                              ))}
-                          </>
-                        )}
-                      </SelectContent>
-                    </Select>
-                  )}
-                </div>
-
-                {/* Manual Date & Session Controls */}
-                <div className="grid grid-cols-2 gap-2 pt-1">
+                {/* 1. Date & Session Controls (At the very top!) */}
+                <div className="grid grid-cols-2 gap-2">
                   <div className="space-y-1">
-                    <Label className="text-[11px] font-semibold text-muted-foreground uppercase tracking-wider">Exam Date</Label>
+                    <Label className="text-[11px] font-semibold text-muted-foreground uppercase tracking-wider flex items-center gap-1">
+                      <Calendar className="size-3 text-primary" />
+                      <span>Exam Date</span>
+                    </Label>
                     <Input
                       type="date"
                       value={selectedDate}
@@ -893,12 +823,15 @@ function SeatingPage() {
                         setPreview(null);
                         void navigate({ to: "/exams/seating", search: { date: e.target.value, session: selectedSession } });
                       }}
-                      className="h-8 text-xs font-medium"
+                      className="h-8.5 text-xs font-medium bg-background"
                     />
                   </div>
 
                   <div className="space-y-1">
-                    <Label className="text-[11px] font-semibold text-muted-foreground uppercase tracking-wider">Session</Label>
+                    <Label className="text-[11px] font-semibold text-muted-foreground uppercase tracking-wider flex items-center gap-1">
+                      <Clock className="size-3 text-primary" />
+                      <span>Session Time</span>
+                    </Label>
                     <Select
                       value={selectedSession}
                       onValueChange={(val) => {
@@ -907,7 +840,7 @@ function SeatingPage() {
                         void navigate({ to: "/exams/seating", search: { date: selectedDate, session: val } });
                       }}
                     >
-                      <SelectTrigger className="h-8 text-xs font-medium">
+                      <SelectTrigger className="h-8.5 text-xs font-medium bg-background">
                         <SelectValue />
                       </SelectTrigger>
                       <SelectContent>
@@ -919,54 +852,151 @@ function SeatingPage() {
                   </div>
                 </div>
 
-                {/* Examination Info Card (Active Sitting Details) */}
-                {scheduledExams.length > 0 ? (
-                  <div className="p-3.5 rounded-lg border border-primary/20 bg-primary/5 space-y-2.5">
-                    <div className="flex items-start justify-between gap-2">
-                      <div>
-                        <span className="text-[10px] uppercase font-bold text-primary tracking-wider block">
-                          {categoryName}
-                        </span>
-                        <h4 className="font-bold text-sm text-foreground">
-                          {scheduledSubjects.join(", ") || "Examination Sitting"}
-                        </h4>
-                      </div>
-                      <Badge className="bg-primary text-primary-foreground font-mono text-xs px-2 py-0.5">
-                        {totalStudents} Students
-                      </Badge>
-                    </div>
-
-                    {/* Appearing Batches */}
-                    <div className="space-y-1 pt-1.5 border-t border-primary/15">
-                      <span className="text-[11px] font-semibold text-muted-foreground block">
-                        Appearing Batches &amp; Sections ({groups.length}):
-                      </span>
-                      <div className="flex flex-wrap gap-1 max-h-36 overflow-y-auto pr-1">
-                        {groups.map((g, idx) => (
-                          <span
-                            key={idx}
-                            className="inline-flex items-center gap-1 text-[10px] font-medium px-2 py-0.5 rounded-md bg-card border border-border text-foreground"
+                {/* Quick Date Pills from Scheduled Exams */}
+                {scheduledSessions.length > 0 && (
+                  <div className="space-y-1 pt-0.5">
+                    <span className="text-[10px] uppercase font-bold text-muted-foreground tracking-wider block">
+                      Quick Pick Exam Date:
+                    </span>
+                    <div className="flex flex-wrap gap-1.5">
+                      {scheduledSessions.slice(0, 4).map((sess) => {
+                        const isActive = sess.date === selectedDate && sess.session.toLowerCase() === selectedSession.toLowerCase();
+                        return (
+                          <button
+                            key={sess.key}
+                            type="button"
+                            onClick={() => {
+                              setSelectedDate(sess.date);
+                              setSelectedSession(sess.session.toLowerCase());
+                              setPreview(null);
+                              void navigate({
+                                to: "/exams/seating",
+                                search: { date: sess.date, session: sess.session.toLowerCase() },
+                              });
+                            }}
+                            className={`text-[11px] px-2.5 py-1 rounded-md border transition-all cursor-pointer flex items-center gap-1.5 ${
+                              isActive
+                                ? "bg-primary text-primary-foreground border-primary font-bold shadow-xs"
+                                : "bg-muted/50 hover:bg-muted text-foreground border-border"
+                            }`}
                           >
-                            <span>{g.label}</span>
-                            <span className="text-primary font-bold">({g.students.length})</span>
-                          </span>
-                        ))}
-                      </div>
+                            <Calendar className="size-3" />
+                            <span>{sess.date}</span>
+                            <span className="capitalize opacity-80">({sess.session})</span>
+                            <span className="font-mono text-[10px] font-bold">
+                              · {sess.totalStudents} st.
+                            </span>
+                          </button>
+                        );
+                      })}
                     </div>
-                  </div>
-                ) : (
-                  <div className="p-3 rounded-lg border border-amber-300/40 bg-amber-500/10 text-amber-800 dark:text-amber-300 text-xs space-y-1">
-                    <p className="font-semibold flex items-center gap-1.5">
-                      <AlertTriangle className="size-3.5" /> No exam scheduled on this date/session
-                    </p>
-                    <p className="text-[11px] text-amber-700 dark:text-amber-400">
-                      Select another date or subject above, or schedule papers in the Examination section.
-                    </p>
                   </div>
                 )}
+
+                {/* 2. Scheduled Papers on this selected date & session */}
+                <div className="space-y-2 pt-2 border-t border-border">
+                  <div className="flex items-center justify-between">
+                    <Label className="text-xs font-semibold text-foreground flex items-center gap-1.5">
+                      <BookOpen className="size-3.5 text-primary" />
+                      <span>Papers on {selectedDate || "selected date"} ({selectedSession}):</span>
+                    </Label>
+                    {examsInCurrentSlot.length > 0 && (
+                      <Badge variant="outline" className="text-[10px] font-mono text-primary border-primary/30">
+                        {examsInCurrentSlot.length} Paper(s)
+                      </Badge>
+                    )}
+                  </div>
+
+                  {examsInCurrentSlot.length === 0 ? (
+                    <div className="p-3 rounded-lg border border-amber-300/50 bg-amber-500/10 text-amber-800 dark:text-amber-300 text-xs space-y-1">
+                      <p className="font-semibold flex items-center gap-1.5">
+                        <AlertTriangle className="size-3.5 shrink-0" />
+                        <span>No exams scheduled on this date &amp; session</span>
+                      </p>
+                      <p className="text-[11px] text-amber-700 dark:text-amber-400">
+                        Pick a date with scheduled papers above, or schedule in Examinations.
+                      </p>
+                      <div className="pt-1">
+                        <Link to="/exams" className="text-xs font-semibold text-primary hover:underline inline-flex items-center gap-1">
+                          + Schedule Paper in Examination Manager →
+                        </Link>
+                      </div>
+                    </div>
+                  ) : (
+                    <div className="space-y-2">
+                      <Select
+                        value={selectedExamId || (examsInCurrentSlot[0]?.id || "")}
+                        onValueChange={(val) => handleSelectExamByPaper(val)}
+                      >
+                        <SelectTrigger className="w-full text-xs h-9 bg-card font-medium">
+                          <SelectValue placeholder="Choose paper or combined slot..." />
+                        </SelectTrigger>
+                        <SelectContent>
+                          {examsInCurrentSlot.length > 1 && (
+                            <SelectItem value="all" className="text-xs py-1.5 font-bold text-primary">
+                              🌐 All {examsInCurrentSlot.length} Papers Combined ({totalStudents} students)
+                            </SelectItem>
+                          )}
+                          {examsInCurrentSlot.map((e) => (
+                            <SelectItem key={e.id} value={e.id} className="text-xs py-1.5">
+                              <div className="flex flex-col text-left">
+                                <span className="font-semibold text-foreground flex items-center gap-1.5">
+                                  {e.subjectName || e.name}
+                                  {e.groups.length > 1 && (
+                                    <span className="text-[10px] text-blue-600 dark:text-blue-400 bg-blue-500/15 border border-blue-500/30 px-1.5 rounded">
+                                      🔀 Alternate ({e.groups.length} Batches)
+                                    </span>
+                                  )}
+                                </span>
+                                <span className="text-[10px] text-muted-foreground font-mono">
+                                  Batches: {e.groups.map(g => `${g.courses?.code || ""} ${g.batches?.name || ""}`).join(", ")} · {e.totalStudents} students
+                                </span>
+                              </div>
+                            </SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+
+                      {/* Paper Details Card */}
+                      <div className="p-3 rounded-lg border border-primary/20 bg-primary/5 space-y-2">
+                        <div className="flex items-start justify-between gap-2">
+                          <div>
+                            <span className="text-[10px] uppercase font-bold text-primary tracking-wider block">
+                              {categoryName}
+                            </span>
+                            <h4 className="font-bold text-xs text-foreground">
+                              {scheduledSubjects.join(", ") || "Examination Papers"}
+                            </h4>
+                          </div>
+                          <Badge className="bg-primary text-primary-foreground font-mono text-xs px-2 py-0.5">
+                            {totalStudents} Students
+                          </Badge>
+                        </div>
+
+                        {/* Distinct Batches List */}
+                        <div className="space-y-1 pt-1.5 border-t border-primary/15">
+                          <span className="text-[10px] font-semibold text-muted-foreground block">
+                            Appearing Batches ({groups.length}):
+                          </span>
+                          <div className="flex flex-wrap gap-1 max-h-28 overflow-y-auto pr-1">
+                            {groups.map((g, idx) => (
+                              <span
+                                key={idx}
+                                className="inline-flex items-center gap-1 text-[10px] font-medium px-2 py-0.5 rounded-md bg-card border border-border text-foreground"
+                              >
+                                <span>{g.label}</span>
+                                <span className="text-primary font-bold">({g.students.length})</span>
+                              </span>
+                            ))}
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+                  )}
+                </div>
               </div>
 
-              {/* Card 2: Seating Configuration & Strategy */}
+              {/* Card 2: Seating Arrangement Mode (Step 2) */}
               <div className="panel p-4 space-y-3.5 bg-card border-border shadow-xs">
                 <div className="flex items-center justify-between border-b border-border pb-2.5">
                   <div className="flex items-center gap-2">
@@ -974,8 +1004,8 @@ function SeatingPage() {
                       <SlidersHorizontal className="size-4" />
                     </div>
                     <div>
-                      <h3 className="font-bold text-sm text-foreground">Seating Strategy</h3>
-                      <p className="text-[11px] text-muted-foreground">Select student desk distribution pattern</p>
+                      <h3 className="font-bold text-sm text-foreground">2. Seating Arrangement Mode</h3>
+                      <p className="text-[11px] text-muted-foreground">Single batch vs two different batches</p>
                     </div>
                   </div>
                   <Badge variant="outline" className="text-[10px] font-semibold text-primary border-primary/30">
@@ -983,158 +1013,201 @@ function SeatingPage() {
                   </Badge>
                 </div>
 
-                {/* Strategy Toggle */}
-                <div className="space-y-2">
+                {/* Mode Selector Buttons */}
+                <div className="space-y-2.5">
                   <div className="grid grid-cols-2 gap-2">
+                    {/* Option 1: Single Batch in Room */}
                     <button
                       type="button"
-                      onClick={() => setStrategy("simple")}
-                      className={`p-2.5 rounded-lg border text-xs font-semibold transition-all cursor-pointer flex flex-col items-center justify-center gap-1 ${
-                        strategy === "simple"
+                      onClick={() => {
+                        setSeatingMode("single");
+                        setStrategy("simple");
+                      }}
+                      className={`p-3 rounded-lg border text-left transition-all cursor-pointer flex flex-col gap-1 ${
+                        seatingMode === "single"
                           ? "border-primary bg-primary/10 text-primary ring-1 ring-primary/30 shadow-2xs"
                           : "border-border hover:bg-muted/50 text-muted-foreground"
                       }`}
                     >
-                      <span>Simple Seating</span>
-                      <span className="text-[10px] font-normal opacity-80">Sequential Column-wise</span>
+                      <div className="flex items-center gap-1.5 font-bold text-xs text-foreground">
+                        <BookOpen className="size-3.5 text-primary" />
+                        <span>Single Batch in Room</span>
+                      </div>
+                      <span className="text-[10px] font-normal text-muted-foreground">
+                        Continuous sequential desk filling for one batch
+                      </span>
                     </button>
 
+                    {/* Option 2: Two Different Batches / Courses */}
                     <button
                       type="button"
                       disabled={!isAlternationAllowed}
                       onClick={() => {
                         if (!isAlternationAllowed) {
-                          toast.error("Alternate seating cannot be applied to a single batch. At least 2 distinct batches/courses are required.");
+                          toast.error("Alternate seating requires at least 2 different batches or courses in this slot.");
                           return;
                         }
+                        setSeatingMode("alternate");
                         setStrategy("alternate");
                       }}
-                      className={`p-2.5 rounded-lg border text-xs font-semibold transition-all flex flex-col items-center justify-center gap-1 ${
+                      className={`p-3 rounded-lg border text-left transition-all flex flex-col gap-1 ${
                         !isAlternationAllowed
                           ? "opacity-50 cursor-not-allowed border-border/50 bg-muted/20 text-muted-foreground"
-                          : strategy === "alternate"
+                          : seatingMode === "alternate"
                             ? "border-primary bg-primary/10 text-primary ring-1 ring-primary/30 shadow-2xs cursor-pointer"
                             : "border-border hover:bg-muted/50 text-muted-foreground cursor-pointer"
                       }`}
                     >
-                      <span className="flex items-center gap-1">
-                        <Sparkles className="size-3" /> Alternate Seating
-                      </span>
-                      <span className="text-[10px] font-normal opacity-80">
-                        {isAlternationAllowed ? "Merge 2 Batches Column-wise" : "Requires 2+ Different Batches"}
+                      <div className="flex items-center gap-1.5 font-bold text-xs text-foreground">
+                        <Shuffle className="size-3.5 text-primary" />
+                        <span>Two Different Batches</span>
+                      </div>
+                      <span className="text-[10px] font-normal text-muted-foreground">
+                        Anti-cheating alternate columns (Batch A ⇄ B)
                       </span>
                     </button>
                   </div>
 
-                  {/* Warning banner when sitting has only 1 batch */}
-                  {!isAlternationAllowed && (
-                    <div className="p-3 rounded-lg border border-amber-300/60 bg-amber-500/10 text-amber-900 dark:text-amber-200 text-xs space-y-1">
-                      <div className="flex items-center gap-1.5 font-bold">
-                        <AlertTriangle className="size-3.5 text-amber-600 dark:text-amber-400" />
-                        <span>Alternate Seating Unavailable for Single Batch</span>
-                      </div>
-                      <p className="text-[11px] text-amber-800 dark:text-amber-300 leading-relaxed">
-                        Alternate seating requires at least <strong>2 distinct batches</strong> (e.g. 2nd Year ⇄ 3rd Year, or CSE ⇄ BBA) to prevent same-paper copying. Since this exam sitting contains only <strong>1 batch</strong> ({distinctBatches[0]?.label || "Single Batch"}), <strong>Simple Sequential Seating</strong> is active.
+                  {/* Mode 1 Controls: Single Batch in Room */}
+                  {seatingMode === "single" && (
+                    <div className="p-3 rounded-lg border border-border bg-muted/20 space-y-2 text-xs">
+                      <Label className="text-[11px] font-semibold text-foreground block">
+                        Select Batch to Seat in Hall(s):
+                      </Label>
+                      <Select
+                        value={selectedSingleBatch}
+                        onValueChange={setSelectedSingleBatch}
+                      >
+                        <SelectTrigger className="w-full h-8 text-xs bg-card font-medium">
+                          <SelectValue placeholder="-- Choose Batch --" />
+                        </SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="ALL_BATCHES">
+                            🌐 All Batches in this Slot ({totalStudents} students)
+                          </SelectItem>
+                          {allBatchOptionsInSlot.map((b) => (
+                            <SelectItem key={b.value} value={b.value}>
+                              {b.label} ({b.count} students)
+                            </SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                      <p className="text-[10px] text-muted-foreground">
+                        💡 Desks will be allocated continuously row-by-row / column-by-column for the chosen batch.
                       </p>
                     </div>
                   )}
 
-                  {/* Alternate Batch Selectors (Shown strictly when 2+ distinct batches exist) */}
-                  {isAlternationAllowed && strategy === "alternate" && (
-                    <div className="p-3 rounded-lg border border-primary/20 bg-primary/5 space-y-2.5 text-xs">
-                      <div className="space-y-1">
-                        <span className="text-[11px] font-semibold text-foreground">Batch 1 (Column 1):</span>
-                        <Select
-                          value={alternateBatchA}
-                          onValueChange={(val) => {
-                            setAlternateBatchA(val);
-                            if (val === alternateBatchB) {
-                              const other = availableBatchOptions.find((b) => b.value !== val);
-                              if (other) setAlternateBatchB(other.value);
-                            }
-                          }}
-                        >
-                          <SelectTrigger className="w-full h-8 text-xs bg-card">
-                            <SelectValue placeholder="Choose Batch A" />
-                          </SelectTrigger>
-                          <SelectContent>
-                            {availableBatchOptions.map((b) => (
-                              <SelectItem key={b.value} value={b.value} disabled={b.value === alternateBatchB}>
-                                {b.label} ({b.count} students)
-                              </SelectItem>
-                            ))}
-                          </SelectContent>
-                        </Select>
-                      </div>
-
-                      <div className="flex justify-center">
-                        <Button
-                          type="button"
-                          variant="ghost"
-                          size="sm"
-                          className="h-6 px-2 text-[11px] text-primary gap-1"
-                          onClick={() => {
-                            const temp = alternateBatchA;
-                            setAlternateBatchA(alternateBatchB);
-                            setAlternateBatchB(temp);
-                          }}
-                        >
-                          <ArrowRightLeft className="size-3" /> Swap Batches
-                        </Button>
-                      </div>
-
-                      <div className="space-y-1">
-                        <span className="text-[11px] font-semibold text-foreground">Batch 2 (Column 2):</span>
-                        <Select
-                          value={alternateBatchB}
-                          onValueChange={(val) => {
-                            if (val === alternateBatchA) {
-                              toast.error("Batch A and Batch B must be different. Alternating the same batch is not permitted.");
-                              return;
-                            }
-                            setAlternateBatchB(val);
-                          }}
-                        >
-                          <SelectTrigger className="w-full h-8 text-xs bg-card">
-                            <SelectValue placeholder="Choose Batch B" />
-                          </SelectTrigger>
-                          <SelectContent>
-                            {availableBatchOptions.filter((b) => b.value !== alternateBatchA).map((b) => (
-                              <SelectItem key={b.value} value={b.value}>
-                                {b.label} ({b.count} students)
-                              </SelectItem>
-                            ))}
-                          </SelectContent>
-                        </Select>
-                      </div>
-
-                      {/* Visual Column Pattern Preview */}
-                      <div className="rounded-lg border border-primary/20 bg-background/80 p-2.5 space-y-1.5 shadow-2xs">
-                        <div className="flex items-center justify-between text-[11px]">
-                          <span className="font-semibold text-foreground flex items-center gap-1">
-                            <span>⚡</span> Column Alternation Pattern:
-                          </span>
-                          <span className="text-muted-foreground font-mono text-[10px]">Zero Adjacent Copying</span>
+                  {/* Mode 2 Controls: Two Different Batches or Courses */}
+                  {seatingMode === "alternate" && (
+                    <div className="space-y-2">
+                      {!isAlternationAllowed ? (
+                        <div className="p-3 rounded-lg border border-amber-300/60 bg-amber-500/10 text-amber-900 dark:text-amber-200 text-xs space-y-1">
+                          <div className="flex items-center gap-1.5 font-bold">
+                            <AlertTriangle className="size-3.5 text-amber-600 dark:text-amber-400" />
+                            <span>Requires 2+ Different Batches</span>
+                          </div>
+                          <p className="text-[11px] text-amber-800 dark:text-amber-300 leading-relaxed">
+                            Alternate seating requires at least <strong>2 distinct batches</strong> (e.g. 2nd Year ⇄ 3rd Year, or CSE ⇄ BBA) to prevent same-paper copying. Since this slot contains only <strong>1 batch</strong> ({distinctBatches[0]?.label || "Single Batch"}), please use <strong>Single Batch in Room</strong> above, or schedule a 2nd batch on this same date &amp; session in Examinations.
+                          </p>
                         </div>
-                        <div className="grid grid-cols-4 gap-1.5 text-center font-mono text-[10px]">
-                          <div className="p-1.5 rounded-md bg-emerald-500/15 border border-emerald-400 text-emerald-800 dark:text-emerald-300 font-bold truncate">
-                            Col 1: {batchAName}
+                      ) : (
+                        <div className="p-3 rounded-lg border border-primary/20 bg-primary/5 space-y-2.5 text-xs">
+                          <div className="space-y-1">
+                            <span className="text-[11px] font-semibold text-foreground">Batch 1 (Column 1, 3, 5...):</span>
+                            <Select
+                              value={alternateBatchA}
+                              onValueChange={(val) => {
+                                setAlternateBatchA(val);
+                                if (val === alternateBatchB) {
+                                  const other = allBatchOptionsInSlot.find((b) => b.value !== val);
+                                  if (other) setAlternateBatchB(other.value);
+                                }
+                              }}
+                            >
+                              <SelectTrigger className="w-full h-8 text-xs bg-card">
+                                <SelectValue placeholder="Choose Batch A" />
+                              </SelectTrigger>
+                              <SelectContent>
+                                {allBatchOptionsInSlot.map((b) => (
+                                  <SelectItem key={b.value} value={b.value} disabled={b.value === alternateBatchB}>
+                                    {b.label} ({b.count} students)
+                                  </SelectItem>
+                                ))}
+                              </SelectContent>
+                            </Select>
                           </div>
-                          <div className="p-1.5 rounded-md bg-sky-500/15 border border-sky-400 text-sky-800 dark:text-sky-300 font-bold truncate">
-                            Col 2: {batchBName}
-                          </div>
-                          <div className="p-1.5 rounded-md bg-emerald-500/15 border border-emerald-400 text-emerald-800 dark:text-emerald-300 font-bold truncate">
-                            Col 3: {batchAName}
-                          </div>
-                          <div className="p-1.5 rounded-md bg-sky-500/15 border border-sky-400 text-sky-800 dark:text-sky-300 font-bold truncate">
-                            Col 4: {batchBName}
-                          </div>
-                        </div>
-                      </div>
 
-                      <p className="text-[10px] text-muted-foreground pt-0.5">
-                        ✓ Column 1, 3, 5 = {batchAName} | Column 2, 4, 6 = {batchBName}
-                      </p>
+                          <div className="flex justify-center">
+                            <Button
+                              type="button"
+                              variant="ghost"
+                              size="sm"
+                              className="h-6 px-2 text-[11px] text-primary gap-1"
+                              onClick={() => {
+                                const temp = alternateBatchA;
+                                setAlternateBatchA(alternateBatchB);
+                                setAlternateBatchB(temp);
+                              }}
+                            >
+                              <ArrowRightLeft className="size-3" /> Swap Batches
+                            </Button>
+                          </div>
+
+                          <div className="space-y-1">
+                            <span className="text-[11px] font-semibold text-foreground">Batch 2 (Column 2, 4, 6...):</span>
+                            <Select
+                              value={alternateBatchB}
+                              onValueChange={(val) => {
+                                if (val === alternateBatchA) {
+                                  toast.error("Batch A and Batch B must be different. Alternating the same batch is not permitted.");
+                                  return;
+                                }
+                                setAlternateBatchB(val);
+                              }}
+                            >
+                              <SelectTrigger className="w-full h-8 text-xs bg-card">
+                                <SelectValue placeholder="Choose Batch B" />
+                              </SelectTrigger>
+                              <SelectContent>
+                                {allBatchOptionsInSlot.filter((b) => b.value !== alternateBatchA).map((b) => (
+                                  <SelectItem key={b.value} value={b.value}>
+                                    {b.label} ({b.count} students)
+                                  </SelectItem>
+                                ))}
+                              </SelectContent>
+                            </Select>
+                          </div>
+
+                          {/* Visual Column Pattern Preview */}
+                          <div className="rounded-lg border border-primary/20 bg-background/80 p-2.5 space-y-1.5 shadow-2xs">
+                            <div className="flex items-center justify-between text-[11px]">
+                              <span className="font-semibold text-foreground flex items-center gap-1">
+                                <span>⚡</span> Column Alternation Pattern:
+                              </span>
+                              <span className="text-muted-foreground font-mono text-[10px]">Zero Adjacent Copying</span>
+                            </div>
+                            <div className="grid grid-cols-4 gap-1.5 text-center font-mono text-[10px]">
+                              <div className="p-1.5 rounded-md bg-emerald-500/15 border border-emerald-400 text-emerald-800 dark:text-emerald-300 font-bold truncate">
+                                Col 1: {batchAName}
+                              </div>
+                              <div className="p-1.5 rounded-md bg-sky-500/15 border border-sky-400 text-sky-800 dark:text-sky-300 font-bold truncate">
+                                Col 2: {batchBName}
+                              </div>
+                              <div className="p-1.5 rounded-md bg-emerald-500/15 border border-emerald-400 text-emerald-800 dark:text-emerald-300 font-bold truncate">
+                                Col 3: {batchAName}
+                              </div>
+                              <div className="p-1.5 rounded-md bg-sky-500/15 border border-sky-400 text-sky-800 dark:text-sky-300 font-bold truncate">
+                                Col 4: {batchBName}
+                              </div>
+                            </div>
+                          </div>
+
+                          <p className="text-[10px] text-muted-foreground pt-0.5">
+                            ✓ Column 1, 3, 5 = {batchAName} | Column 2, 4, 6 = {batchBName}
+                          </p>
+                        </div>
+                      )}
                     </div>
                   )}
                 </div>
