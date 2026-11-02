@@ -1,9 +1,10 @@
 import { createFileRoute, useParams } from "@tanstack/react-router";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { useMemo, useState } from "react";
-import { CheckCircle2, FileSpreadsheet, Loader2, Upload } from "lucide-react";
+import { AlertTriangle, CheckCircle2, FileSpreadsheet, Loader2, Upload } from "lucide-react";
 import { toast } from "sonner";
 
+import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Input } from "@/components/ui/input";
@@ -466,6 +467,38 @@ function WorkbookForm() {
               </div>
             ))}
           </div>
+
+          {/* Skipped & Removed Rows Section */}
+          {preview.skipped && preview.skipped.length > 0 && (
+            <div className="rounded-xl border border-rose-500/25 bg-rose-500/5 p-3.5 space-y-2.5">
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-2">
+                  <AlertTriangle className="size-4 text-rose-600 shrink-0" />
+                  <h4 className="text-xs font-bold text-rose-800 dark:text-rose-400">
+                    {preview.skipped.length} Invalid / Duplicate Rows Skipped &amp; Removed
+                  </h4>
+                </div>
+                <Badge variant="outline" className="text-[10px] border-rose-500/30 text-rose-600 bg-rose-500/10 font-bold">
+                  {preview.skipped.length} Skipped
+                </Badge>
+              </div>
+              <p className="text-[11px] text-muted-foreground">
+                These rows have missing required fields (blank Roll Number, blank Email ID, blank Name) or duplicate records. They are excluded from the import:
+              </p>
+              <div className="max-h-40 overflow-y-auto divide-y divide-rose-500/10 rounded-lg border border-rose-500/20 bg-card text-xs">
+                {preview.skipped.map((s, idx) => (
+                  <div key={idx} className="p-2.5 flex items-start justify-between gap-3 hover:bg-muted/30">
+                    <span className="font-mono font-bold text-rose-700 dark:text-rose-300 text-[11px] shrink-0">
+                      Row {s.rowNumber}
+                    </span>
+                    <span className="text-rose-600 dark:text-rose-400 font-medium text-[11px] text-right">
+                      {s.reason}
+                    </span>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
 
           {/* Diff Conflict Resolver Section */}
           {preview.diffs && preview.diffs.length > 0 ? (

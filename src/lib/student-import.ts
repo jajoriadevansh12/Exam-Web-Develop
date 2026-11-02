@@ -321,8 +321,8 @@ export async function parseStudentWorkbook(file: File): Promise<ExcelStudentRow[
     }
 
     const emailVal = (mapped["email"] || fallbackEmail || "").trim().toLowerCase();
-    const rawReg = (mapped["registrationNumber"] || mapped["rollNumber"] || "").trim();
-    const rawRoll = (mapped["rollNumber"] || mapped["registrationNumber"] || "").trim();
+    const rawReg = (mapped["registrationNumber"] ?? "").trim();
+    const rawRoll = (mapped["rollNumber"] ?? "").trim();
 
     return {
       registrationNumber: normalizeRegistrationNumber(rawReg),
@@ -343,27 +343,59 @@ export async function buildSyncPreview(params: {
 
   const invalidRows: SyncPreview["invalidRows"] = [];
   const duplicateRows: SyncPreview["duplicateRows"] = [];
-  const seen = new Set<string>();
+  const seenReg = new Map<string, number>();
+  const seenRoll = new Map<string, number>();
+  const seenEmail = new Map<string, number>();
   const validRows: ExcelStudentRow[] = [];
 
   for (const row of rows) {
-    if (!row.registrationNumber) {
-      invalidRows.push({ rowNumber: row.rowNumber, reason: "Missing registration number" });
-      continue;
-    }
     if (!row.name) {
-      invalidRows.push({ rowNumber: row.rowNumber, reason: "Missing student name" });
+      invalidRows.push({ rowNumber: row.rowNumber, reason: "Missing / Blank Student Name" });
       continue;
     }
-    if (!row.email || !row.email.includes("@")) {
-      invalidRows.push({ rowNumber: row.rowNumber, reason: "Missing or invalid email address" });
+    if (!row.registrationNumber) {
+      invalidRows.push({ rowNumber: row.rowNumber, reason: "Missing / Blank Registration Number" });
       continue;
     }
-    if (seen.has(row.registrationNumber)) {
-      duplicateRows.push({ rowNumber: row.rowNumber, registrationNumber: row.registrationNumber });
+    if (!row.rollNumber) {
+      invalidRows.push({ rowNumber: row.rowNumber, reason: "Missing / Blank Roll Number" });
       continue;
     }
-    seen.add(row.registrationNumber);
+    if (!row.email) {
+      invalidRows.push({ rowNumber: row.rowNumber, reason: "Missing / Blank Email ID" });
+      continue;
+    }
+    if (!row.email.includes("@") || !row.email.includes(".")) {
+      invalidRows.push({ rowNumber: row.rowNumber, reason: `Invalid Email ID format ('${row.email}')` });
+      continue;
+    }
+
+    // Check duplicates in file
+    if (seenReg.has(row.registrationNumber)) {
+      duplicateRows.push({
+        rowNumber: row.rowNumber,
+        registrationNumber: `${row.registrationNumber} (Duplicate Registration No — already in Row ${seenReg.get(row.registrationNumber)})`,
+      });
+      continue;
+    }
+    if (seenRoll.has(row.rollNumber.toLowerCase())) {
+      duplicateRows.push({
+        rowNumber: row.rowNumber,
+        registrationNumber: `${row.registrationNumber} (Duplicate Roll No '${row.rollNumber}' — already in Row ${seenRoll.get(row.rollNumber.toLowerCase())})`,
+      });
+      continue;
+    }
+    if (seenEmail.has(row.email.toLowerCase())) {
+      duplicateRows.push({
+        rowNumber: row.rowNumber,
+        registrationNumber: `${row.registrationNumber} (Duplicate Email '${row.email}' — already in Row ${seenEmail.get(row.email.toLowerCase())})`,
+      });
+      continue;
+    }
+
+    seenReg.set(row.registrationNumber, row.rowNumber);
+    seenRoll.set(row.rollNumber.toLowerCase(), row.rowNumber);
+    seenEmail.set(row.email.toLowerCase(), row.rowNumber);
     validRows.push(row);
   }
 

@@ -542,6 +542,39 @@ function ProfessorsPage() {
             </div>
           </div>
 
+          {/* Faculty Excel Import Result Banner */}
+          {importResult && (
+            <div className={`p-4 rounded-xl border ${importResult.errors?.length > 0 ? "border-amber-500/30 bg-amber-500/5" : "border-emerald-500/30 bg-emerald-500/5"} space-y-3`}>
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-2">
+                  <CheckCircle2 className="size-4 text-emerald-600" />
+                  <p className="text-xs font-bold text-foreground">
+                    Import Result: {importResult.created} Created, {importResult.updated} Updated, {importResult.skipped} Skipped/Removed
+                  </p>
+                </div>
+                <Button variant="ghost" size="sm" className="h-6 text-xs" onClick={() => setImportResult(null)}>
+                  Dismiss
+                </Button>
+              </div>
+
+              {importResult.errors && importResult.errors.length > 0 && (
+                <div className="rounded-lg border border-rose-500/20 bg-card p-3 space-y-1.5">
+                  <p className="text-xs font-semibold text-rose-700 dark:text-rose-400 flex items-center gap-1.5">
+                    <AlertTriangle className="size-3.5 text-rose-600" />
+                    <span>{importResult.errors.length} Rows Skipped / Removed with Reasons:</span>
+                  </p>
+                  <div className="max-h-36 overflow-y-auto divide-y divide-border/60 text-[11px]">
+                    {importResult.errors.map((err, i) => (
+                      <p key={i} className="py-1 text-muted-foreground font-mono">
+                        {err}
+                      </p>
+                    ))}
+                  </div>
+                </div>
+              )}
+            </div>
+          )}
+
           {isLoading ? (
             <div className="space-y-2 p-4">
               {[1, 2, 3].map((i) => <Skeleton key={i} className="h-10 w-full" />)}

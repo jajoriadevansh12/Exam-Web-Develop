@@ -411,6 +411,9 @@ export async function parseMasterWorkbook(file: File): Promise<MasterPreview> {
 
   const rows: MasterRow[] = [];
   const skipped: MasterPreview["skipped"] = [];
+  const seenRegInFile = new Map<string, number>();
+  const seenRollInFile = new Map<string, number>();
+  const seenEmailInFile = new Map<string, number>();
 
   raw.forEach((record, index) => {
     const rowNumber = index + 2;
@@ -438,18 +441,58 @@ export async function parseMasterWorkbook(file: File): Promise<MasterPreview> {
 
     const email = (mapped["email"] || fallbackEmail || "").trim().toLowerCase();
     const name = (mapped["name"] ?? "").replace(/\s+/g, " ").trim();
-    const rawReg = (mapped["registrationNumber"] || mapped["rollNumber"] || "").trim();
-    const rawRoll = (mapped["rollNumber"] || mapped["registrationNumber"] || "").trim();
+    const rawReg = (mapped["registrationNumber"] ?? "").trim();
+    const rawRoll = (mapped["rollNumber"] ?? "").trim();
     const registrationNumber = normalizeRegistrationNumber(rawReg);
 
-    if (!name || !registrationNumber) {
-      skipped.push({ rowNumber, reason: !name ? "Missing student name" : "Missing registration/roll number" });
+    // 1. Strict Blank / Missing Details Validation (email, roll number, reg number, name)
+    if (!name) {
+      skipped.push({ rowNumber, reason: "Removed: Student Name is blank / missing" });
       return;
     }
-    if (!email || !email.includes("@")) {
-      skipped.push({ rowNumber, reason: "Missing or invalid email address" });
+    if (!rawReg || !registrationNumber) {
+      skipped.push({ rowNumber, reason: "Removed: Registration Number is blank / missing" });
       return;
     }
+    if (!rawRoll) {
+      skipped.push({ rowNumber, reason: "Removed: Roll Number is blank / missing" });
+      return;
+    }
+    if (!email) {
+      skipped.push({ rowNumber, reason: "Removed: Email ID is blank / missing" });
+      return;
+    }
+    if (!email.includes("@") || !email.includes(".")) {
+      skipped.push({ rowNumber, reason: `Removed: Email ID '${email}' is invalid` });
+      return;
+    }
+
+    // 2. Strict Duplicate Details Detection within File
+    if (seenRegInFile.has(registrationNumber)) {
+      skipped.push({
+        rowNumber,
+        reason: `Skipped: Duplicate Registration Number '${registrationNumber}' (already appeared in Row ${seenRegInFile.get(registrationNumber)})`,
+      });
+      return;
+    }
+    if (seenRollInFile.has(rawRoll.toLowerCase())) {
+      skipped.push({
+        rowNumber,
+        reason: `Skipped: Duplicate Roll Number '${rawRoll}' (already appeared in Row ${seenRollInFile.get(rawRoll.toLowerCase())})`,
+      });
+      return;
+    }
+    if (seenEmailInFile.has(email)) {
+      skipped.push({
+        rowNumber,
+        reason: `Skipped: Duplicate Email ID '${email}' (already appeared in Row ${seenEmailInFile.get(email)})`,
+      });
+      return;
+    }
+
+    seenRegInFile.set(registrationNumber, rowNumber);
+    seenRollInFile.set(rawRoll.toLowerCase(), rowNumber);
+    seenEmailInFile.set(email, rowNumber);
 
     const courseName = mapped["courseName"] ?? "";
     const courseCode = (mapped["courseCode"] ?? courseName.replace(/[^a-z]/gi, "").slice(0, 8))
@@ -467,9 +510,9 @@ export async function parseMasterWorkbook(file: File): Promise<MasterPreview> {
       endYear: years.end,
       section: normalizeSectionName(mapped["section"] ?? ""),
       registrationNumber,
-      rollNumber: mapped["rollNumber"] ?? "",
+      rollNumber: rawRoll,
       name,
-      email: (mapped["email"] ?? "").trim().toLowerCase(),
+      email,
       subjects: [...new Set(subjects)],
     });
   });

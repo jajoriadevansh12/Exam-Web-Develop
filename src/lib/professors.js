@@ -93,7 +93,12 @@ export async function importProfessorsFromRows(rows) {
 
   const errors = [];
 
+  const seenEmpInFile = new Map();
+  const seenEmailInFile = new Map();
+
+  let rowIndex = 1;
   for (const raw of rows) {
+    rowIndex++;
     const employeeId = String(
       raw["Employee ID"] ??
         raw["employee_id"] ??
@@ -116,7 +121,7 @@ export async function importProfessorsFromRows(rows) {
       raw["Email"] ??
         raw["email"] ??
         "",
-    ).trim();
+    ).trim().toLowerCase();
 
     const phone =
       String(
@@ -133,19 +138,46 @@ export async function importProfessorsFromRows(rows) {
         10,
       ) || 10;
 
-    if (
-      !employeeId ||
-      !name ||
-      !department ||
-      !email
-    ) {
+    // 1. Strict Blank / Missing Details Validation
+    if (!employeeId || !name || !department || !email) {
+      const missing = [];
+      if (!employeeId) missing.push("Employee ID");
+      if (!name) missing.push("Name");
+      if (!department) missing.push("Department");
+      if (!email) missing.push("Email ID");
       errors.push(
-        `Row skipped — missing required field (Employee ID: "${employeeId}")`,
+        `Row ${rowIndex}: Removed — Missing required field(s): ${missing.join(", ")}`,
       );
-
       skipped++;
       continue;
     }
+
+    if (!email.includes("@") || !email.includes(".")) {
+      errors.push(
+        `Row ${rowIndex}: Removed — Invalid Email ID format ('${email}')`,
+      );
+      skipped++;
+      continue;
+    }
+
+    // 2. Strict Duplicate Details Detection in File
+    if (seenEmpInFile.has(employeeId.toLowerCase())) {
+      errors.push(
+        `Row ${rowIndex}: Skipped — Duplicate Employee ID '${employeeId}' (already appeared in Row ${seenEmpInFile.get(employeeId.toLowerCase())})`,
+      );
+      skipped++;
+      continue;
+    }
+    if (seenEmailInFile.has(email)) {
+      errors.push(
+        `Row ${rowIndex}: Skipped — Duplicate Email ID '${email}' (already appeared in Row ${seenEmailInFile.get(email)})`,
+      );
+      skipped++;
+      continue;
+    }
+
+    seenEmpInFile.set(employeeId.toLowerCase(), rowIndex);
+    seenEmailInFile.set(email, rowIndex);
 
     const { data: existing, error: existingError } =
       await supabase
@@ -1113,8 +1145,11 @@ export async function importLeavesFromRows(
 
   const errors = [];
   const conflicts = [];
+  const seenLeavesInFile = new Map();
 
+  let rowIndex = 1;
   for (const raw of rows) {
+    rowIndex++;
     const employeeId = String(
       raw["Employee ID"] ??
         raw["employee_id"] ??
@@ -1168,12 +1203,22 @@ export async function importLeavesFromRows(
       !leaveDate
     ) {
       errors.push(
-        "Row skipped — Employee ID or Leave Date missing",
+        `Row ${rowIndex}: Removed — Missing ${!employeeId ? "Employee ID" : "Leave Date"}`,
       );
 
       skipped++;
       continue;
     }
+
+    const leaveKey = `${employeeId.toLowerCase()}::${leaveDate}`;
+    if (seenLeavesInFile.has(leaveKey)) {
+      errors.push(
+        `Row ${rowIndex}: Skipped — Duplicate leave entry for Employee '${employeeId}' on ${leaveDate} (already appeared in Row ${seenLeavesInFile.get(leaveKey)})`,
+      );
+      skipped++;
+      continue;
+    }
+    seenLeavesInFile.set(leaveKey, rowIndex);
 
     const professorResult =
       await supabase
