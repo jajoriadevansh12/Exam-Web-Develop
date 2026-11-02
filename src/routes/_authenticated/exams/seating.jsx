@@ -324,30 +324,49 @@ function SeatingPage() {
 
   // Auto-select active rooms to fit totalStudents or sync with saved plan
   useEffect(() => {
-    if (selectedRooms.length === 0 && activeRooms.length > 0) {
-      if (saved?.seats && saved.seats.length > 0) {
-        const savedRoomIds = [...new Set(saved.seats.map((s) => s.room_id))];
-        setSelectedRooms(savedRoomIds);
-      } else if (totalStudents > 0) {
-        const sorted = [...activeRooms].sort((a, b) => {
-          const bComp = a.block.localeCompare(b.block);
-          if (bComp !== 0) return bComp;
-          return a.room_number.localeCompare(b.room_number, undefined, { numeric: true });
-        });
+    if (activeRooms.length === 0) return;
 
-        let currentCapacity = 0;
-        const chosen = [];
-        for (const r of sorted) {
-          chosen.push(r.id);
-          currentCapacity += r.row_count * r.seats_per_row;
-          if (currentCapacity >= totalStudents) {
-            break;
-          }
+    // 1. If this exact slot has a saved plan whose rooms meet totalStudents, load saved rooms
+    if (saved?.seats && saved.seats.length > 0) {
+      const savedRoomIds = [...new Set(saved.seats.map((s) => s.room_id))];
+      const savedCap = activeRooms
+        .filter((r) => savedRoomIds.includes(r.id))
+        .reduce((sum, r) => sum + r.row_count * r.seats_per_row, 0);
+
+      if (savedCap >= totalStudents && savedRoomIds.length > 0) {
+        if (selectedRooms.length === 0 || savedRoomIds.some((id) => !selectedRooms.includes(id))) {
+          setSelectedRooms(savedRoomIds);
         }
-        setSelectedRooms(chosen.length > 0 ? chosen : activeRooms.map((r) => r.id));
+        return;
       }
     }
-  }, [saved, activeRooms, totalStudents, selectedRooms.length]);
+
+    // 2. If no rooms selected OR currently selected capacity is insufficient (< totalStudents):
+    // Auto-pick enough active halls sorted by block & room number to guarantee 100% capacity!
+    const currentCap = activeRooms
+      .filter((r) => selectedRooms.includes(r.id))
+      .reduce((sum, r) => sum + r.row_count * r.seats_per_row, 0);
+
+    if (totalStudents > 0 && (selectedRooms.length === 0 || currentCap < totalStudents)) {
+      const sorted = [...activeRooms].sort((a, b) => {
+        const bComp = a.block.localeCompare(b.block);
+        if (bComp !== 0) return bComp;
+        return a.room_number.localeCompare(b.room_number, undefined, { numeric: true });
+      });
+
+      let currentCapacity = 0;
+      const chosen = [];
+      for (const r of sorted) {
+        chosen.push(r.id);
+        currentCapacity += r.row_count * r.seats_per_row;
+        if (currentCapacity >= totalStudents) {
+          break;
+        }
+      }
+      const finalRooms = chosen.length > 0 ? chosen : activeRooms.map((r) => r.id);
+      setSelectedRooms(finalRooms);
+    }
+  }, [saved, activeRooms, totalStudents, selectedDate, selectedSession, selectedExamId]);
 
   // Unified display rooms (either newly generated preview or previously saved plan)
   const displayRooms = useMemo(() => {
@@ -1245,9 +1264,13 @@ function SeatingPage() {
                   </div>
 
                   <div className="pt-1 flex items-center justify-between gap-2">
-                    {selectedCapacity >= totalStudents ? (
+                    {selectedCapacity >= totalStudents && totalStudents > 0 ? (
                       <Badge className="bg-emerald-500/15 text-emerald-700 dark:text-emerald-400 border-emerald-300 gap-1 text-[11px]">
                         <Check className="size-3" /> Sufficient (+{selectedCapacity - totalStudents} extra)
+                      </Badge>
+                    ) : totalStudents === 0 ? (
+                      <Badge variant="outline" className="text-[11px] text-muted-foreground">
+                        No students in slot
                       </Badge>
                     ) : (
                       <Badge variant="destructive" className="gap-1 text-[11px]">
@@ -1255,14 +1278,25 @@ function SeatingPage() {
                       </Badge>
                     )}
 
-                    <Button
-                      variant="outline"
-                      size="sm"
-                      onClick={() => setHallModalOpen(true)}
-                      className="h-7 text-[11px] gap-1"
-                    >
-                      Manage Halls ({selectedRooms.length})
-                    </Button>
+                    <div className="flex items-center gap-1.5">
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        onClick={handleAutoSelectRooms}
+                        className="h-7 text-[11px] gap-1 text-primary hover:bg-primary/10"
+                        title="Auto-select optimal halls"
+                      >
+                        <Sparkles className="size-3" /> Auto-Select
+                      </Button>
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        onClick={() => setHallModalOpen(true)}
+                        className="h-7 text-[11px] gap-1"
+                      >
+                        Manage Halls ({selectedRooms.length})
+                      </Button>
+                    </div>
                   </div>
                 </div>
 

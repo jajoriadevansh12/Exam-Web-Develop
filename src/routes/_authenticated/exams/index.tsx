@@ -91,6 +91,7 @@ type FormState = {
   category: string;
   customCategory: string;
   subjectName: string;
+  secondarySubjectName?: string;
   exam_date: string;
   session: "morning" | "afternoon" | "evening";
   batchSelections: Array<{ course_id: string; batch_id: string }>;
@@ -100,6 +101,7 @@ const EMPTY_FORM: FormState = {
   category: "Mid Semester",
   customCategory: "",
   subjectName: "",
+  secondarySubjectName: "",
   exam_date: "",
   session: "morning",
   batchSelections: [],
@@ -350,6 +352,36 @@ function ExamsPage() {
         throw new Error("Please specify the exam folder/category");
       }
 
+      // If alternate seating with 2 distinct batches is scheduled as new:
+      if (secondaryBatch && form.batchSelections.length >= 2 && !form.id) {
+        if (!form.subjectName.trim()) {
+          throw new Error(`Please specify paper name for Batch 1 (${primaryBatch?.name || "Primary"})`);
+        }
+        const secondaryPaper = (form.secondarySubjectName || form.subjectName).trim();
+        if (!secondaryPaper) {
+          throw new Error(`Please specify paper name for Batch 2 (${secondaryBatch?.name || "Secondary"})`);
+        }
+
+        // Schedule both examinations on the exact same date & session so each batch has its specific paper
+        await saveExamWithBatches({
+          category: activeCategory,
+          subjectName: form.subjectName.trim(),
+          exam_date: form.exam_date,
+          session: form.session,
+          batchSelections: [form.batchSelections[0]],
+        });
+
+        await saveExamWithBatches({
+          category: activeCategory,
+          subjectName: secondaryPaper,
+          exam_date: form.exam_date,
+          session: form.session,
+          batchSelections: [form.batchSelections[1]],
+        });
+
+        return { count: 2, batch1Name: primaryBatch?.name, batch2Name: secondaryBatch?.name, p1: form.subjectName.trim(), p2: secondaryPaper };
+      }
+
       const parsed = schema.parse({
         category: activeCategory,
         subjectName: form.subjectName,
@@ -358,17 +390,28 @@ function ExamsPage() {
         batchSelections: form.batchSelections,
       });
 
+      const effectiveSubject =
+        form.id && secondaryBatch && form.secondarySubjectName && form.secondarySubjectName.trim()
+          ? `${parsed.subjectName.trim()} / ${form.secondarySubjectName.trim()}`
+          : parsed.subjectName;
+
       return saveExamWithBatches({
         id: form.id,
         category: parsed.category,
-        subjectName: parsed.subjectName,
+        subjectName: effectiveSubject,
         exam_date: parsed.exam_date,
         session: parsed.session,
         batchSelections: parsed.batchSelections,
       });
     },
-    onSuccess: () => {
-      toast.success(form.id ? "Exam updated successfully" : "Exam scheduled successfully");
+    onSuccess: (res: any) => {
+      if (res?.count === 2) {
+        toast.success(
+          `Scheduled both papers: "${res.p1}" (${res.batch1Name}) & "${res.p2}" (${res.batch2Name}) on ${form.exam_date} (${form.session}) for Alternate Seating!`,
+        );
+      } else {
+        toast.success(form.id ? "Exam updated successfully" : "Exam scheduled successfully");
+      }
       setOpen(false);
       void queryClient.invalidateQueries({ queryKey: ["exams_detailed"] });
       void queryClient.invalidateQueries({ queryKey: ["exams"] });
@@ -409,11 +452,13 @@ function ExamsPage() {
     setEditingExam(exam);
     setShowMultipleBatches(exam.groups.length > 1);
     const isCustomCat = !DEFAULT_CATEGORIES.includes(exam.category);
+    const parts = (exam.subjectName || exam.name || "").split(/\s*[/&]\s*/);
     setForm({
       id: exam.id,
       category: isCustomCat ? "custom" : exam.category,
       customCategory: isCustomCat ? exam.category : "",
-      subjectName: exam.subjectName || exam.name,
+      subjectName: parts[0] || exam.subjectName || exam.name,
+      secondarySubjectName: parts[1] || "",
       exam_date: exam.exam_date,
       session: (exam.session as "morning" | "afternoon" | "evening") || "morning",
       batchSelections: exam.groups.map((g) => ({
@@ -436,6 +481,7 @@ function ExamsPage() {
       }
       return {
         ...prev,
+        subjectName: "",
         batchSelections: newSelections,
       };
     });
@@ -445,6 +491,7 @@ function ExamsPage() {
     if (batchId === "none" || !batchId) {
       setForm((prev) => ({
         ...prev,
+        secondarySubjectName: "",
         batchSelections: prev.batchSelections.slice(0, 1),
       }));
       return;
@@ -456,11 +503,13 @@ function ExamsPage() {
       if (!primary) {
         return {
           ...prev,
+          secondarySubjectName: "",
           batchSelections: [{ course_id: b.course_id, batch_id: b.id }],
         };
       }
       return {
         ...prev,
+        secondarySubjectName: prev.secondarySubjectName || "",
         batchSelections: [primary, { course_id: b.course_id, batch_id: b.id }],
       };
     });
@@ -977,15 +1026,15 @@ function ExamsPage() {
             </div>
 
             {/* ── STEP 3: Subject / Paper (Strictly for Selected Course & Batch) ── */}
-            <div className="rounded-xl border border-primary/20 bg-primary/5 p-4 space-y-3">
+            <div className="rounded-xl border border-primary/20 bg-primary/5 p-4 space-y-3.5">
               <div className="flex items-center justify-between">
                 <Label htmlFor="exam-subject-name" className="text-xs font-bold uppercase tracking-wider text-foreground flex items-center gap-1.5">
                   <BookOpen className="size-4 text-primary" />
-                  <span>3. Subject / Paper Name *</span>
+                  <span>3. Examination Subject / Paper Name *</span>
                 </Label>
                 {form.subjectName && (
                   <Badge variant="outline" className="font-semibold text-[11px] bg-primary/10 text-primary border-primary/25">
-                    Paper: {form.subjectName}
+                    {secondaryBatch ? `P1: ${form.subjectName}` : `Paper: ${form.subjectName}`}
                   </Badge>
                 )}
               </div>
@@ -1000,36 +1049,46 @@ function ExamsPage() {
                   </p>
                 </div>
               ) : (
-                <div className="space-y-2">
-                  <Select
-                    value={
-                      batchSubjects.some((s) => s.name === form.subjectName) ||
-                      secondaryBatchSubjects.some((s) => s.name === form.subjectName)
-                        ? form.subjectName
-                        : form.subjectName
-                          ? "__custom__"
-                          : ""
-                    }
-                    onValueChange={(val) => {
-                      if (val === "__custom__") {
-                        setForm((prev) => ({ ...prev, subjectName: "" }));
-                      } else {
-                        setForm((prev) => ({ ...prev, subjectName: val }));
+                <div className="space-y-4">
+                  {/* Primary Batch Paper Box */}
+                  <div className="p-3.5 rounded-lg border border-border bg-card space-y-2.5">
+                    <div className="flex items-center justify-between">
+                      <span className="text-xs font-bold text-foreground flex items-center gap-1.5">
+                        <span className="size-2 rounded-full bg-primary" />
+                        <span>Paper for Batch 1 ({primaryBatch.courses?.code || ""} {primaryBatch.name}) *</span>
+                      </span>
+                      <span className="text-[11px] font-mono text-muted-foreground">
+                        {batchCounts[primaryBatch.id] || 0} students
+                      </span>
+                    </div>
+
+                    <Select
+                      value={
+                        batchSubjects.some((s) => s.name === form.subjectName)
+                          ? form.subjectName
+                          : form.subjectName
+                            ? "__custom__"
+                            : ""
                       }
-                    }}
-                  >
-                    <SelectTrigger className="w-full bg-background font-medium h-9 text-xs">
-                      <SelectValue
-                        placeholder={
-                          batchSubjects.length > 0
-                            ? `-- Select Subject for ${primaryBatch.courses?.code || ""} ${primaryBatch.name} (${batchSubjects.length} subjects found) --`
-                            : `-- No subjects found for ${primaryBatch.name}. Type custom paper name below --`
+                      onValueChange={(val) => {
+                        if (val === "__custom__") {
+                          setForm((prev) => ({ ...prev, subjectName: "" }));
+                        } else {
+                          setForm((prev) => ({ ...prev, subjectName: val }));
                         }
-                      />
-                    </SelectTrigger>
-                    <SelectContent className="max-h-64 overflow-y-auto">
-                      {batchSubjects.length > 0 ? (
-                        batchSubjects.map((s) => (
+                      }}
+                    >
+                      <SelectTrigger className="w-full bg-background font-medium h-9 text-xs">
+                        <SelectValue
+                          placeholder={
+                            batchSubjects.length > 0
+                              ? `-- Select Subject for ${primaryBatch.courses?.code || ""} ${primaryBatch.name} (${batchSubjects.length} subjects found) --`
+                              : `-- No subjects found for ${primaryBatch.name}. Type custom paper name below --`
+                          }
+                        />
+                      </SelectTrigger>
+                      <SelectContent className="max-h-60 overflow-y-auto">
+                        {batchSubjects.map((s) => (
                           <SelectItem key={s.id} value={s.name} className="py-1.5 text-xs">
                             <div className="flex items-center justify-between w-full gap-3">
                               <span className="font-semibold text-foreground">{s.label}</span>
@@ -1038,18 +1097,83 @@ function ExamsPage() {
                               </span>
                             </div>
                           </SelectItem>
-                        ))
-                      ) : (
-                        <div className="p-2 text-xs text-muted-foreground text-center italic">
-                          No subjects registered for {primaryBatch.name}
-                        </div>
-                      )}
+                        ))}
+                        <SelectItem value="__custom__" className="text-primary font-semibold border-t border-border mt-1 pt-1 text-xs">
+                          ✏️ + Type other / custom paper name...
+                        </SelectItem>
+                      </SelectContent>
+                    </Select>
 
-                      {secondaryBatch && secondaryBatchSubjects.length > 0 && (
-                        <>
-                          <div className="px-2 py-1.5 text-[10px] font-bold text-muted-foreground uppercase tracking-wider bg-muted/60 border-y border-border mt-1">
-                            2nd Batch ({secondaryBatch.courses?.code || ""} {secondaryBatch.name}) Papers:
-                          </div>
+                    <Input
+                      id="exam-subject-name"
+                      placeholder={`Enter paper name for ${primaryBatch.name}...`}
+                      value={form.subjectName}
+                      onChange={(e) => setForm({ ...form, subjectName: e.target.value })}
+                      className="bg-background text-xs h-9 font-medium"
+                    />
+
+                    {popularSubjects.length > 0 && (
+                      <div className="flex flex-wrap items-center gap-1.5 pt-0.5">
+                        <span className="text-[11px] font-medium text-muted-foreground mr-1">
+                          Quick Select ({primaryBatch.name}):
+                        </span>
+                        {popularSubjects.map((sName) => (
+                          <button
+                            key={sName}
+                            type="button"
+                            onClick={() => setForm((prev) => ({ ...prev, subjectName: sName }))}
+                            className={`text-[11px] px-2 py-0.5 rounded-md border transition-all ${
+                              form.subjectName.toLowerCase() === sName.toLowerCase()
+                                ? "bg-primary text-primary-foreground border-primary font-semibold shadow-xs"
+                                : "bg-background hover:bg-muted text-foreground border-border"
+                            }`}
+                          >
+                            {sName}
+                          </button>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+
+                  {/* Secondary Batch Paper Box (When 2nd Batch is Merged for Alternate Seating) */}
+                  {secondaryBatch && (
+                    <div className="p-3.5 rounded-lg border border-primary/30 bg-primary/10 dark:bg-primary/20 space-y-2.5">
+                      <div className="flex items-center justify-between">
+                        <span className="text-xs font-bold text-foreground flex items-center gap-1.5">
+                          <Shuffle className="size-3.5 text-primary" />
+                          <span>Paper for Batch 2 ({secondaryBatch.courses?.code || ""} {secondaryBatch.name}) *</span>
+                        </span>
+                        <Badge className="bg-primary/20 text-primary border-primary/30 text-[10px] font-mono font-bold">
+                          🔀 Alternate Batch ({batchCounts[secondaryBatch.id] || 0} students)
+                        </Badge>
+                      </div>
+
+                      <Select
+                        value={
+                          secondaryBatchSubjects.some((s) => s.name === (form.secondarySubjectName || ""))
+                            ? form.secondarySubjectName
+                            : form.secondarySubjectName
+                              ? "__custom__"
+                              : ""
+                        }
+                        onValueChange={(val) => {
+                          if (val === "__custom__") {
+                            setForm((prev) => ({ ...prev, secondarySubjectName: "" }));
+                          } else {
+                            setForm((prev) => ({ ...prev, secondarySubjectName: val }));
+                          }
+                        }}
+                      >
+                        <SelectTrigger className="w-full bg-background font-medium h-9 text-xs">
+                          <SelectValue
+                            placeholder={
+                              secondaryBatchSubjects.length > 0
+                                ? `-- Select Subject for ${secondaryBatch.courses?.code || ""} ${secondaryBatch.name} (${secondaryBatchSubjects.length} subjects found) --`
+                                : `-- No subjects found for ${secondaryBatch.name}. Type custom paper name below --`
+                            }
+                          />
+                        </SelectTrigger>
+                        <SelectContent className="max-h-60 overflow-y-auto">
                           {secondaryBatchSubjects.map((s) => (
                             <SelectItem key={s.id} value={s.name} className="py-1.5 text-xs">
                               <div className="flex items-center justify-between w-full gap-3">
@@ -1060,64 +1184,41 @@ function ExamsPage() {
                               </div>
                             </SelectItem>
                           ))}
-                        </>
+                          <SelectItem value="__custom__" className="text-primary font-semibold border-t border-border mt-1 pt-1 text-xs">
+                            ✏️ + Type other / custom paper name...
+                          </SelectItem>
+                        </SelectContent>
+                      </Select>
+
+                      <Input
+                        id="exam-secondary-subject-name"
+                        placeholder={`Enter paper name for ${secondaryBatch.name}...`}
+                        value={form.secondarySubjectName || ""}
+                        onChange={(e) => setForm({ ...form, secondarySubjectName: e.target.value })}
+                        className="bg-background text-xs h-9 font-medium"
+                      />
+
+                      {secondaryPopularSubjects.length > 0 && (
+                        <div className="flex flex-wrap items-center gap-1.5 pt-0.5">
+                          <span className="text-[11px] font-medium text-muted-foreground mr-1">
+                            Quick Select ({secondaryBatch.name}):
+                          </span>
+                          {secondaryPopularSubjects.map((sName) => (
+                            <button
+                              key={sName}
+                              type="button"
+                              onClick={() => setForm((prev) => ({ ...prev, secondarySubjectName: sName }))}
+                              className={`text-[11px] px-2 py-0.5 rounded-md border transition-all ${
+                                (form.secondarySubjectName || "").toLowerCase() === sName.toLowerCase()
+                                  ? "bg-primary text-primary-foreground border-primary font-semibold shadow-xs"
+                                  : "bg-background hover:bg-muted text-foreground border-border"
+                              }`}
+                            >
+                              {sName}
+                            </button>
+                          ))}
+                        </div>
                       )}
-
-                      <SelectItem value="__custom__" className="text-primary font-semibold border-t border-border mt-1 pt-1 text-xs">
-                        ✏️ + Type other / custom paper name...
-                      </SelectItem>
-                    </SelectContent>
-                  </Select>
-
-                  <Input
-                    id="exam-subject-name"
-                    placeholder="Or type/edit exam or paper name directly..."
-                    value={form.subjectName}
-                    onChange={(e) => setForm({ ...form, subjectName: e.target.value })}
-                    className="bg-background text-xs h-9 font-medium"
-                  />
-
-                  {popularSubjects.length > 0 && (
-                    <div className="flex flex-wrap items-center gap-1.5 pt-0.5">
-                      <span className="text-[11px] font-medium text-muted-foreground mr-1">
-                        {primaryBatch.name} Papers:
-                      </span>
-                      {popularSubjects.map((sName) => (
-                        <button
-                          key={sName}
-                          type="button"
-                          onClick={() => setForm((prev) => ({ ...prev, subjectName: sName }))}
-                          className={`text-[11px] px-2 py-0.5 rounded-md border transition-all ${
-                            form.subjectName.toLowerCase() === sName.toLowerCase()
-                              ? "bg-primary text-primary-foreground border-primary font-semibold shadow-xs"
-                              : "bg-background hover:bg-muted text-foreground border-border"
-                          }`}
-                        >
-                          {sName}
-                        </button>
-                      ))}
-                    </div>
-                  )}
-
-                  {secondaryBatch && secondaryPopularSubjects.length > 0 && (
-                    <div className="flex flex-wrap items-center gap-1.5 pt-0.5">
-                      <span className="text-[11px] font-medium text-muted-foreground mr-1">
-                        {secondaryBatch.name} Papers:
-                      </span>
-                      {secondaryPopularSubjects.map((sName) => (
-                        <button
-                          key={sName}
-                          type="button"
-                          onClick={() => setForm((prev) => ({ ...prev, subjectName: sName }))}
-                          className={`text-[11px] px-2 py-0.5 rounded-md border transition-all ${
-                            form.subjectName.toLowerCase() === sName.toLowerCase()
-                              ? "bg-primary text-primary-foreground border-primary font-semibold shadow-xs"
-                              : "bg-background hover:bg-muted text-foreground border-border"
-                          }`}
-                        >
-                          {sName}
-                        </button>
-                      ))}
                     </div>
                   )}
                 </div>
