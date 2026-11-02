@@ -267,6 +267,10 @@ function SeatingPage() {
     return BATCH_COLOR_PALETTES[0];
   };
 
+  const batchColorMap = useMemo(() => ({
+    get: (label) => getBatchPalette(label),
+  }), [alternateBatchA, alternateBatchB, availableBatchOptions]);
+
   // Default to simple strategy if fewer than 2 distinct batches exist
   useEffect(() => {
     if (!isAlternationAllowed && strategy !== "simple") {
@@ -1356,7 +1360,7 @@ function SeatingPage() {
                     {/* Legend of Batches */}
                     <div className="flex items-center gap-1.5 flex-wrap">
                       {groups.map((g) => {
-                        const palette = batchColorMap.get(g.label) || BATCH_COLOR_PALETTES[0];
+                        const palette = getBatchPalette(g.label);
                         return (
                           <span
                             key={g.label}
@@ -1401,7 +1405,7 @@ function SeatingPage() {
                             {/* Batches inside this hall */}
                             <div className="flex flex-wrap items-center gap-1.5">
                               {groupsInRoom.map((label) => {
-                                const palette = batchColorMap.get(label) || BATCH_COLOR_PALETTES[0];
+                                const palette = getBatchPalette(label);
                                 return (
                                   <span
                                     key={label}
