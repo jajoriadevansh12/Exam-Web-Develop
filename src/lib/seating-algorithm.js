@@ -50,13 +50,17 @@ export function validateMergePair(groupA, groupB) {
     return { valid: false, reason: "Incomplete merge pair selected." };
   }
 
-  // Same Batch ID or same batch key is strictly forbidden
+  // Same Batch ID or same batch key is strictly forbidden UNLESS different exams
   const batchIdA = groupA.batch_id || groupA.key || groupA.value;
   const batchIdB = groupB.batch_id || groupB.key || groupB.value;
-  if (batchIdA && batchIdB && batchIdA === batchIdB) {
+  const examIdA = groupA.exam_id;
+  const examIdB = groupB.exam_id;
+  const isDiffExam = Boolean(examIdA && examIdB && examIdA !== examIdB);
+
+  if (!isDiffExam && batchIdA && batchIdB && batchIdA === batchIdB) {
     return {
       valid: false,
-      reason: "Alternate seating cannot be applied to the same batch. Two distinct batches are required.",
+      reason: "Alternate seating cannot be applied to the same batch of the same exam. Two distinct batches or papers are required.",
       type: "same_batch",
     };
   }
@@ -67,12 +71,12 @@ export function validateMergePair(groupA, groupB) {
   const yearA = getGroupYear(groupA);
   const yearB = getGroupYear(groupB);
 
-  // If same course and same year, MERGE IS PROHIBITED
-  if (courseA && courseB && courseA === courseB) {
+  // If same course and same year, MERGE IS PROHIBITED UNLESS DIFFERENT EXAMS
+  if (!isDiffExam && courseA && courseB && courseA === courseB) {
     if (yearA && yearB && yearA === yearB) {
       return {
         valid: false,
-        reason: `Same Year & Same Course (${courseA} ${yearA}) cannot be merged. Merge is only allowed between different batches/years or different courses.`,
+        reason: `Same Year & Same Course (${courseA} ${yearA}) cannot be merged for the same exam. Merge is only allowed between different batches/years or different papers.`,
         type: "same_year_same_course",
       };
     }
@@ -82,11 +86,13 @@ export function validateMergePair(groupA, groupB) {
   const isDiffCourse = Boolean(courseA && courseB && courseA !== courseB);
 
   return {
-    valid: isDiffCourse || isDiffYear,
-    reason: isDiffCourse
-      ? `Different Courses (${courseA} ⇄ ${courseB})`
-      : `Different Admission Years (${yearA} ⇄ ${yearB})`,
-    type: isDiffCourse ? "diff_course" : "diff_year",
+    valid: isDiffCourse || isDiffYear || isDiffExam,
+    reason: isDiffExam
+      ? `Different Exam Papers`
+      : isDiffCourse
+        ? `Different Courses (${courseA} ⇄ ${courseB})`
+        : `Different Admission Years (${yearA} ⇄ ${yearB})`,
+    type: isDiffExam ? "diff_exam" : isDiffCourse ? "diff_course" : "diff_year",
   };
 }
 
@@ -106,16 +112,33 @@ export function matchesBatchOrGroup(q, target) {
   const fullLabel = `${qCourseCode} ${qBatchName}`.trim().toUpperCase();
   const compoundKey = `${qCourseId}_${qBatchId}_${qExamId}`;
 
-  // 1. Direct compound key or batch_id matching
-  if (compoundKey && (t === compoundKey || t.includes(compoundKey))) return true;
-  if (qBatchId && (t === qBatchId || t.includes(qBatchId))) return true;
+  // 1. Direct compound key matching
+  if (compoundKey && t === compoundKey) return true;
+  if (t.includes("_")) {
+    const parts = t.split("_");
+    if (parts.length === 3) {
+      const [tCourse, tBatch, tExam] = parts;
+      const hasAnyId = Boolean(qCourseId || qBatchId || qExamId);
+      if (hasAnyId) {
+        const courseMatch = !tCourse || tCourse === qCourseId;
+        const batchMatch = !tBatch || tBatch === qBatchId;
+        const examMatch = !tExam || tExam === qExamId;
+        if (courseMatch && batchMatch && examMatch) return true;
+        return false;
+      }
+    }
+  }
 
-  // 2. Year matching (e.g. "2024", "2023")
+  // 2. Direct exact ID matching (when target is a single UUID or raw ID)
+  if (qBatchId && t === qBatchId) return true;
+  if (qExamId && t === qExamId) return true;
+
+  // 3. Year matching (e.g. "2024", "2023")
   const targetYear = extractYear(t);
   const groupYear = getGroupYear(q);
   if (targetYear && groupYear && targetYear === groupYear) return true;
 
-  // 3. Name or label substring matching
+  // 4. Name or label substring matching
   if (t === qLabel || qLabel.includes(t) || t.includes(qLabel)) return true;
   if (fullLabel && (t === fullLabel || fullLabel.includes(t) || t.includes(fullLabel))) return true;
   if (qBatchName && (t === qBatchName || qBatchName.includes(t) || t.includes(qBatchName))) return true;
@@ -135,8 +158,12 @@ export function matchesBatchOrGroup(q, target) {
  *   streamB: Queues for Row 1, Row 3, Row 5...
  */
 export function pairQueuesForAlternate(queues) {
-  // Check if at least 2 distinct batches exist across queues
-  const getBatchKey = (q) => q.batch_id || `${q.course_id || q.course_code || ""}_${q.batch_name || getGroupYear(q) || ""}`;
+  // Check if at least 2 distinct batches or exam papers exist across queues
+  const getBatchKey = (q) => {
+    if (q.exam_id && q.batch_id) return `${q.exam_id}_${q.batch_id}`;
+    if (q.exam_id && (q.course_id || q.course_code)) return `${q.exam_id}_${q.course_id || q.course_code}`;
+    return q.batch_id || `${q.course_id || q.course_code || ""}_${q.batch_name || getGroupYear(q) || ""}`;
+  };
   const distinctKeys = new Set(queues.map(getBatchKey));
   if (distinctKeys.size < 2) {
     // Only 1 batch present - CANNOT alternate with same batch!
@@ -209,6 +236,9 @@ export function pairQueuesForAlternate(queues) {
       const courseB = (itemB.course_code || itemB.course_name || itemB.label.split(" ")[0] || "").trim().toUpperCase();
       const yearB = getGroupYear(itemB);
       if (courseA && courseB && courseA === courseB && yearA && yearB && yearA === yearB) {
+        if (itemA.exam_id && itemB.exam_id && itemA.exam_id !== itemB.exam_id) {
+          return true; // Different exam papers can always be paired
+        }
         return false; // same year, same course!
       }
       return true;
@@ -291,16 +321,21 @@ export function buildSeatingPlan(groups, rooms, strategy = "alternate", options 
       batch_id: g.batch_id || "",
       course_id: g.course_id || "",
       exam_id: g.exam_id || "",
+      paper_name: g.paper_name || "",
       items: [...g.students],
     }))
     .filter((q) => q.items.length > 0);
 
-  // Helper to identify unique batch
-  const getBatchKey = (q) => q.batch_id || `${q.course_id || q.course_code || ""}_${q.batch_name || getGroupYear(q) || ""}`;
+  // Helper to identify unique batch or exam paper
+  const getBatchKey = (q) => {
+    if (q.exam_id && q.batch_id) return `${q.exam_id}_${q.batch_id}`;
+    if (q.exam_id && (q.course_id || q.course_code)) return `${q.exam_id}_${q.course_id || q.course_code}`;
+    return q.batch_id || `${q.course_id || q.course_code || ""}_${q.batch_name || getGroupYear(q) || ""}`;
+  };
   const distinctBatchesCount = new Set(queues.map(getBatchKey)).size;
 
-  // STRICT RULE: Alternation is NEVER allowed with the same batch!
-  // If only 1 batch is present, alternate seating is impossible.
+  // STRICT RULE: Alternation is NEVER allowed with the same batch of the same exam!
+  // If only 1 batch/paper is present, alternate seating is impossible.
   let isAlternate = (strategy === "alternate" || strategy === "alternate_rows" || strategy === "alternate_columns");
   if (isAlternate && distinctBatchesCount < 2) {
     isAlternate = false;
@@ -496,6 +531,12 @@ export function buildSeatingPlan(groups, rooms, strategy = "alternate", options 
             row_number: row + 1,
             seat_number: col + 1,
             group_label: found.label,
+            batch_id: found.batch_id,
+            course_id: found.course_id,
+            exam_id: found.exam_id,
+            paper_name: found.paper_name,
+            batch_name: found.batch_name,
+            course_code: found.course_code,
             student,
             students: student,
           });
@@ -529,6 +570,12 @@ export function buildSeatingPlan(groups, rooms, strategy = "alternate", options 
             row_number: row + 1,
             seat_number: col + 1,
             group_label: picked.label,
+            batch_id: picked.batch_id,
+            course_id: picked.course_id,
+            exam_id: picked.exam_id,
+            paper_name: picked.paper_name,
+            batch_name: picked.batch_name,
+            course_code: picked.course_code,
             student,
             students: student,
           });

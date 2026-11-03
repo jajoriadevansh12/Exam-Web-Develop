@@ -2,6 +2,7 @@ import { supabase } from "@/integrations/supabase/client";
 import { logActivity } from "@/lib/db";
 import {
   buildSeatingPlan,
+  matchesBatchOrGroup,
   type RoomShape,
   type SeatingGroup,
   type SeatingResult,
@@ -818,9 +819,11 @@ export async function previewSeatingForDate(
     }
   }
 
-  // STRICT RULE: Alternation is NEVER allowed with the same batch!
-  // If fewer than 2 distinct batches exist, force Simple strategy.
-  const uniqueBatchesCount = new Set(activeGroups.map((g: any) => g.batch_id || g.label)).size;
+  // STRICT RULE: Alternation is NEVER allowed with the same batch of the same exam!
+  // If fewer than 2 distinct batches or exam papers exist, force Simple strategy.
+  const uniqueBatchesCount = new Set(
+    activeGroups.map((g: any) => `${g.exam_id || ""}_${g.batch_id || g.label}`),
+  ).size;
   if (
     (effectiveStrategy === "alternate" || effectiveStrategy === "alternate_columns" || effectiveStrategy === "alternate_rows") &&
     uniqueBatchesCount < 2

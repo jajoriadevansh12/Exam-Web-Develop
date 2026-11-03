@@ -221,12 +221,13 @@ function SeatingPage() {
   const distinctBatches = sittingData?.distinctBatches ?? [];
   const allBatchOptionsInSlot = useMemo(() => {
     return distinctBatches.map((b) => ({
-      value: b.batch_id || b.key || b.label,
+      value: b.key || b.batch_id || b.label,
       key: b.key,
       label: b.label,
-      name: b.batch_name || b.label,
+      name: b.paper_name ? `${b.paper_name} (${b.batch_name || b.label})` : (b.batch_name || b.label),
+      paper_name: b.paper_name,
       count: b.count,
-      id: b.batch_id || b.key,
+      id: b.key || b.batch_id,
       batch_id: b.batch_id,
       course_id: b.course_id,
       exam_id: b.exam_id,
@@ -257,23 +258,51 @@ function SeatingPage() {
   }, [availableBatchOptions, alternateBatchB]);
 
   // Reliable palette resolver for any cell group_label
-  const getBatchPalette = (label) => {
-    if (!label) return BATCH_COLOR_PALETTES[0];
-    const lbl = String(label).toUpperCase();
+  const getBatchPalette = (label, seat) => {
+    if (!label && !seat) return BATCH_COLOR_PALETTES[0];
+    const lbl = String(label || seat?.group_label || "").toUpperCase();
+    const q = seat
+      ? {
+          label: label || seat.group_label,
+          batch_id: seat.batch_id,
+          course_id: seat.course_id,
+          exam_id: seat.exam_id,
+          paper_name: seat.paper_name,
+          batch_name: seat.batch_name,
+          course_code: seat.course_code,
+        }
+      : { label };
     
     // Check if matches Batch A (Column 1, 3, 5...) -> Emerald
-    if (alternateBatchA && matchesBatchOrGroup({ label }, alternateBatchA)) {
-      return BATCH_COLOR_PALETTES[0];
+    if (alternateBatchA) {
+      const optA = availableBatchOptions.find((b) => b.value === alternateBatchA);
+      if (
+        matchesBatchOrGroup(q, alternateBatchA) ||
+        (optA && (matchesBatchOrGroup(q, optA.label) || matchesBatchOrGroup(q, optA.name) || (optA.paper_name && lbl.includes(optA.paper_name.toUpperCase()))))
+      ) {
+        return BATCH_COLOR_PALETTES[0];
+      }
     }
     // Check if matches Batch B (Column 2, 4, 6...) -> Sky Blue
-    if (alternateBatchB && matchesBatchOrGroup({ label }, alternateBatchB)) {
-      return BATCH_COLOR_PALETTES[1];
+    if (alternateBatchB) {
+      const optB = availableBatchOptions.find((b) => b.value === alternateBatchB);
+      if (
+        matchesBatchOrGroup(q, alternateBatchB) ||
+        (optB && (matchesBatchOrGroup(q, optB.label) || matchesBatchOrGroup(q, optB.name) || (optB.paper_name && lbl.includes(optB.paper_name.toUpperCase()))))
+      ) {
+        return BATCH_COLOR_PALETTES[1];
+      }
     }
 
     // Check availableBatchOptions by index
     for (let i = 0; i < availableBatchOptions.length; i++) {
       const b = availableBatchOptions[i];
-      if (matchesBatchOrGroup({ label }, b.value) || matchesBatchOrGroup({ label }, b.label) || matchesBatchOrGroup({ label }, b.name)) {
+      if (
+        matchesBatchOrGroup(q, b.value) ||
+        matchesBatchOrGroup(q, b.label) ||
+        matchesBatchOrGroup(q, b.name) ||
+        (b.paper_name && lbl.includes(b.paper_name.toUpperCase()))
+      ) {
         return BATCH_COLOR_PALETTES[i % BATCH_COLOR_PALETTES.length];
       }
     }
@@ -288,7 +317,7 @@ function SeatingPage() {
   };
 
   const batchColorMap = useMemo(() => ({
-    get: (label) => getBatchPalette(label),
+    get: (label, seat) => getBatchPalette(label, seat),
   }), [alternateBatchA, alternateBatchB, availableBatchOptions]);
 
   // Sync mode and strategy
