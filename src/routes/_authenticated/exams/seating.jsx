@@ -480,10 +480,18 @@ function SeatingPage() {
 
     const finalRooms = chosen.length > 0 ? chosen : activeRooms.map((r) => r.id);
     setSelectedRooms(finalRooms);
-    const vacantInLast = Math.max(0, currentCapacity - totalStudents);
-    toast.success(
-      `Auto-selected ${finalRooms.length} hall(s) (${currentCapacity} seats for ${totalStudents} students). ${vacantInLast} vacant seat(s) remaining!`,
-    );
+
+    if (currentCapacity < totalStudents) {
+      toast.error(
+        `Sitting capacity kam hai! Active halls me sirf ${currentCapacity} seats available hain jabki ${totalStudents} students hain (${totalStudents - currentCapacity} seats kam hain). Kripya naye halls add karein!`,
+      );
+      setShortfallOpen(true);
+    } else {
+      const vacantInLast = Math.max(0, currentCapacity - totalStudents);
+      toast.success(
+        `Auto-selected ${finalRooms.length} hall(s) (${currentCapacity} seats for ${totalStudents} students). ${vacantInLast} vacant seat(s) remaining!`,
+      );
+    }
     return finalRooms;
   };
 
@@ -521,8 +529,8 @@ function SeatingPage() {
       setPreview(result);
       if (result.unseated.length > 0) {
         setShortfallOpen(true);
-        toast.warning(
-          `Attention: ${result.unseated.length} student(s) could not be seated! Please select more halls.`,
+        toast.error(
+          `Sitting capacity kam hai! ${result.unseated.length} student(s) baith nahi paaye. Kripya aur halls add ya select karein!`,
         );
       } else {
         toast.info(
@@ -543,6 +551,18 @@ function SeatingPage() {
       toast.error("Please add or select examination halls first.");
       return;
     }
+
+    const currentCap = activeRooms
+      .filter((r) => targetRooms.includes(r.id))
+      .reduce((sum, r) => sum + r.row_count * r.seats_per_row, 0);
+
+    if (totalStudents > 0 && currentCap < totalStudents) {
+      toast.error(
+        `Sitting capacity kam hai! Selected halls me sirf ${currentCap} seats hain jabki ${totalStudents} students ko baithana hai (${totalStudents - currentCap} seats kam hain).`,
+      );
+      setShortfallOpen(true);
+    }
+
     previewMut.mutate(targetRooms);
   };
 
@@ -550,6 +570,11 @@ function SeatingPage() {
   const savePlan = useMutation({
     mutationFn: () => {
       if (!preview) throw new Error("No seating plan preview to save.");
+      if (preview.unseated && preview.unseated.length > 0) {
+        throw new Error(
+          `Sitting capacity kam hai! ${preview.unseated.length} students ke liye seats nahi hain. Pehle sabhi students ke liye seats allocate karein.`,
+        );
+      }
       return saveSeatingPlanForDate(
         selectedDate,
         selectedSession,
@@ -1362,19 +1387,53 @@ function SeatingPage() {
             <div className="lg:col-span-8 xl:col-span-8 space-y-4">
               {/* STATE 1: UNSAVED PREVIEW (Verification Pending) */}
               {isUnsavedPreview && (
-                <div className="panel p-4.5 border-2 border-amber-500/60 bg-amber-500/10 dark:bg-amber-950/20 space-y-3.5 shadow-sm">
-                  <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-amber-500/20 pb-3">
+                <div
+                  className={`panel p-4.5 border-2 space-y-3.5 shadow-sm ${
+                    preview.unseated.length > 0
+                      ? "border-destructive/80 bg-destructive/10 dark:bg-destructive/20"
+                      : "border-amber-500/60 bg-amber-500/10 dark:bg-amber-950/20"
+                  }`}
+                >
+                  <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b pb-3">
                     <div className="space-y-1">
                       <div className="flex items-center gap-2">
-                        <Badge className="bg-amber-500 text-white font-bold text-xs gap-1 py-0.5">
-                          <AlertTriangle className="size-3.5" /> PREVIEW ONLY (UNSAVED)
-                        </Badge>
-                        <span className="text-xs font-semibold text-amber-900 dark:text-amber-200">
-                          Verification Required Before Saving
+                        {preview.unseated.length > 0 ? (
+                          <Badge variant="destructive" className="font-bold text-xs gap-1 py-0.5">
+                            <AlertTriangle className="size-3.5" /> SITTING CAPACITY KAM HAI ({preview.unseated.length} UNSEATED)
+                          </Badge>
+                        ) : (
+                          <Badge className="bg-amber-500 text-white font-bold text-xs gap-1 py-0.5">
+                            <AlertTriangle className="size-3.5" /> PREVIEW ONLY (UNSAVED)
+                          </Badge>
+                        )}
+                        <span
+                          className={`text-xs font-semibold ${
+                            preview.unseated.length > 0
+                              ? "text-destructive font-bold"
+                              : "text-amber-900 dark:text-amber-200"
+                          }`}
+                        >
+                          {preview.unseated.length > 0
+                            ? `Sitting kam hai! ${preview.unseated.length} students baith nahi sake.`
+                            : "Verification Required Before Saving"}
                         </span>
                       </div>
-                      <p className="text-xs text-amber-800 dark:text-amber-300">
-                        Please review the classroom desk layout below. The seating arrangement will <strong>NOT be saved</strong> to the database until you click <strong>&quot;Confirm &amp; Save Seating Plan&quot;</strong>.
+                      <p
+                        className={`text-xs ${
+                          preview.unseated.length > 0
+                            ? "text-destructive font-medium"
+                            : "text-amber-800 dark:text-amber-300"
+                        }`}
+                      >
+                        {preview.unseated.length > 0 ? (
+                          <>
+                            <strong>Error:</strong> Selected halls me {preview.unseated.length} students ke liye jagah kam hai. Sabhi students ko baithane ke liye aur halls add ya select karein.
+                          </>
+                        ) : (
+                          <>
+                            Please review the classroom desk layout below. The seating arrangement will <strong>NOT be saved</strong> to the database until you click <strong>&quot;Confirm &amp; Save Seating Plan&quot;</strong>.
+                          </>
+                        )}
                       </p>
                     </div>
 
@@ -1384,24 +1443,40 @@ function SeatingPage() {
                         size="sm"
                         variant="outline"
                         onClick={handleDiscardPreview}
-                        className="h-9 text-xs border-amber-300 dark:border-amber-700 text-amber-900 dark:text-amber-200 hover:bg-amber-500/20"
+                        className="h-9 text-xs"
                       >
                         <X className="size-3.5 mr-1" /> Discard
                       </Button>
 
-                      <Button
-                        size="sm"
-                        onClick={() => savePlan.mutate()}
-                        disabled={savePlan.isPending}
-                        className="h-9 text-xs font-bold gap-1.5 bg-emerald-600 hover:bg-emerald-700 text-white shadow-sm ring-2 ring-emerald-500/30"
-                      >
-                        {savePlan.isPending ? (
-                          <Loader2 className="size-3.5 animate-spin" />
-                        ) : (
-                          <CheckCircle2 className="size-4" />
-                        )}
-                        Confirm &amp; Save Seating Plan
-                      </Button>
+                      {preview.unseated.length > 0 ? (
+                        <Button
+                          size="sm"
+                          variant="destructive"
+                          onClick={() => {
+                            setShortfallOpen(true);
+                            toast.error(
+                              `Sitting capacity kam hai! ${preview.unseated.length} students baith nahi paaye. Kripya pehle aur halls select karein.`,
+                            );
+                          }}
+                          className="h-9 text-xs font-bold gap-1.5 cursor-pointer shadow-sm"
+                        >
+                          <AlertTriangle className="size-4" /> Sitting Kam Hai ({preview.unseated.length})
+                        </Button>
+                      ) : (
+                        <Button
+                          size="sm"
+                          onClick={() => savePlan.mutate()}
+                          disabled={savePlan.isPending}
+                          className="h-9 text-xs font-bold gap-1.5 bg-emerald-600 hover:bg-emerald-700 text-white shadow-sm ring-2 ring-emerald-500/30 cursor-pointer"
+                        >
+                          {savePlan.isPending ? (
+                            <Loader2 className="size-3.5 animate-spin" />
+                          ) : (
+                            <CheckCircle2 className="size-4" />
+                          )}
+                          Confirm &amp; Save Seating Plan
+                        </Button>
+                      )}
                     </div>
                   </div>
 
@@ -2141,26 +2216,80 @@ function SeatingPage() {
 
       {/* Shortfall dialog */}
       <Dialog open={shortfallOpen} onOpenChange={setShortfallOpen}>
-        <DialogContent>
+        <DialogContent className="max-w-md">
           <DialogHeader>
-            <DialogTitle className="flex items-center gap-2">
-              <AlertTriangle className="size-4 text-amber-500" />
-              {preview?.unseated?.length} student(s) could not be seated
+            <DialogTitle className="flex items-center gap-2 text-destructive">
+              <AlertTriangle className="size-5 text-destructive" />
+              Sitting Capacity Kam Hai!
             </DialogTitle>
-            <DialogDescription>
-              The selected examination halls do not have enough capacity. Please select more rooms from the Exam Halls tab or click &quot;Auto-Select Optimal Halls&quot;.
+            <DialogDescription className="text-xs text-foreground font-medium pt-1">
+              {preview?.unseated?.length ? (
+                <>
+                  <span className="text-destructive font-bold">{preview.unseated.length} student(s)</span> baith nahi paaye kyunki selected examination halls me seats kam pad gayi hain.
+                </>
+              ) : (
+                <>
+                  Selected examination halls me total capacity required students se kam hai. Kripya aur halls add/select karein.
+                </>
+              )}
             </DialogDescription>
           </DialogHeader>
-          <div className="max-h-48 overflow-y-auto text-sm space-y-1">
-            {preview?.unseated?.map((u) => (
-              <div key={u.student_id} className="flex justify-between text-xs py-1 border-b">
-                <span className="font-mono">{u.registration_number}</span>
-                <span className="text-muted-foreground">{u.group_label}</span>
-              </div>
-            ))}
+
+          <div className="p-3 rounded-lg border border-destructive/30 bg-destructive/10 text-xs space-y-1.5">
+            <div className="flex justify-between font-semibold">
+              <span>Required Students:</span>
+              <span>{totalStudents}</span>
+            </div>
+            <div className="flex justify-between font-semibold">
+              <span>Selected Capacity:</span>
+              <span className="text-destructive">{selectedCapacity} Seats</span>
+            </div>
+            <div className="flex justify-between font-bold text-destructive border-t border-destructive/20 pt-1">
+              <span>Shortfall (Kitni Seats Kam Hain):</span>
+              <span>
+                {preview?.unseated?.length || Math.max(0, totalStudents - selectedCapacity)} Seats
+              </span>
+            </div>
           </div>
-          <DialogFooter>
-            <Button onClick={() => setShortfallOpen(false)}>Close</Button>
+
+          {preview?.unseated && preview.unseated.length > 0 && (
+            <div className="space-y-1">
+              <span className="text-[11px] font-bold text-muted-foreground uppercase tracking-wider block">
+                Unseated Students List ({preview.unseated.length}):
+              </span>
+              <div className="max-h-40 overflow-y-auto text-xs space-y-1 border rounded-md p-2 bg-muted/20">
+                {preview.unseated.map((u) => (
+                  <div key={u.student_id} className="flex justify-between py-0.5 border-b border-border/50 last:border-0 font-mono">
+                    <span className="font-bold">{u.registration_number}</span>
+                    <span className="text-muted-foreground truncate max-w-[200px]">{u.group_label}</span>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
+          <DialogFooter className="flex-col sm:flex-row gap-2 pt-2">
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => {
+                setShortfallOpen(false);
+                setHallModalOpen(true);
+              }}
+              className="text-xs"
+            >
+              <Building2 className="size-3.5 mr-1" /> Select More Halls
+            </Button>
+            <Button
+              size="sm"
+              onClick={() => {
+                handleAutoSelectRooms();
+                setShortfallOpen(false);
+              }}
+              className="text-xs bg-primary"
+            >
+              <Sparkles className="size-3.5 mr-1" /> Auto-Select Optimal Halls
+            </Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>

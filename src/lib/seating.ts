@@ -313,6 +313,12 @@ export async function saveSeatingPlan(
   result: SeatingResult,
   strategy: Strategy,
 ) {
+  if (result.unseated && result.unseated.length > 0) {
+    throw new Error(
+      `Sitting capacity kam hai! ${result.unseated.length} students ke liye seats nahi hain. All students must be seated before saving the plan.`,
+    );
+  }
+
   const { data: sessionData } = await supabase.auth.getSession();
 
   await supabase.from("seating_plans").delete().eq("exam_id", examId);
@@ -870,6 +876,12 @@ export async function saveSeatingPlanForDate(
 
   if (matchedExams.length === 0) {
     throw new Error("No scheduled exams found for this date and session.");
+  }
+
+  if (result.unseated && result.unseated.length > 0) {
+    throw new Error(
+      `Sitting capacity kam hai! ${result.unseated.length} students ke liye seats nahi hain. All students must be seated before saving the plan.`,
+    );
   }
 
   const { data: sessionData } = await supabase.auth.getSession();
