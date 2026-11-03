@@ -483,7 +483,7 @@ function SeatingPage() {
 
     if (currentCapacity < totalStudents) {
       toast.error(
-        `Sitting capacity kam hai! Active halls me sirf ${currentCapacity} seats available hain jabki ${totalStudents} students hain (${totalStudents - currentCapacity} seats kam hain). Kripya naye halls add karein!`,
+        `Insufficient seating capacity! Active halls only have ${currentCapacity} seats available for ${totalStudents} students (${totalStudents - currentCapacity} seats short). Please add more halls!`,
       );
       setShortfallOpen(true);
     } else {
@@ -530,7 +530,7 @@ function SeatingPage() {
       if (result.unseated.length > 0) {
         setShortfallOpen(true);
         toast.error(
-          `Sitting capacity kam hai! ${result.unseated.length} student(s) baith nahi paaye. Kripya aur halls add ya select karein!`,
+          `Insufficient seating capacity! ${result.unseated.length} student(s) could not be seated. Please select or add more examination halls!`,
         );
       } else {
         toast.info(
@@ -558,7 +558,7 @@ function SeatingPage() {
 
     if (totalStudents > 0 && currentCap < totalStudents) {
       toast.error(
-        `Sitting capacity kam hai! Selected halls me sirf ${currentCap} seats hain jabki ${totalStudents} students ko baithana hai (${totalStudents - currentCap} seats kam hain).`,
+        `Insufficient seating capacity! Selected halls only have ${currentCap} seats for ${totalStudents} students (${totalStudents - currentCap} seats short). Please select more halls.`,
       );
       setShortfallOpen(true);
     }
@@ -572,7 +572,7 @@ function SeatingPage() {
       if (!preview) throw new Error("No seating plan preview to save.");
       if (preview.unseated && preview.unseated.length > 0) {
         throw new Error(
-          `Sitting capacity kam hai! ${preview.unseated.length} students ke liye seats nahi hain. Pehle sabhi students ke liye seats allocate karein.`,
+          `Insufficient seating capacity! ${preview.unseated.length} student(s) remain unseated. All students must have a seat before saving the plan.`,
         );
       }
       return saveSeatingPlanForDate(
@@ -1399,7 +1399,7 @@ function SeatingPage() {
                       <div className="flex items-center gap-2">
                         {preview.unseated.length > 0 ? (
                           <Badge variant="destructive" className="font-bold text-xs gap-1 py-0.5">
-                            <AlertTriangle className="size-3.5" /> SITTING CAPACITY KAM HAI ({preview.unseated.length} UNSEATED)
+                            <AlertTriangle className="size-3.5" /> INSUFFICIENT SEATING CAPACITY ({preview.unseated.length} UNSEATED)
                           </Badge>
                         ) : (
                           <Badge className="bg-amber-500 text-white font-bold text-xs gap-1 py-0.5">
@@ -1414,7 +1414,7 @@ function SeatingPage() {
                           }`}
                         >
                           {preview.unseated.length > 0
-                            ? `Sitting kam hai! ${preview.unseated.length} students baith nahi sake.`
+                            ? `Insufficient seating capacity! ${preview.unseated.length} student(s) could not be seated.`
                             : "Verification Required Before Saving"}
                         </span>
                       </div>
@@ -1427,7 +1427,7 @@ function SeatingPage() {
                       >
                         {preview.unseated.length > 0 ? (
                           <>
-                            <strong>Error:</strong> Selected halls me {preview.unseated.length} students ke liye jagah kam hai. Sabhi students ko baithane ke liye aur halls add ya select karein.
+                            <strong>Error:</strong> The selected halls lack sufficient seats for {preview.unseated.length} student(s). Please add or select more halls to seat all students.
                           </>
                         ) : (
                           <>
@@ -1455,12 +1455,12 @@ function SeatingPage() {
                           onClick={() => {
                             setShortfallOpen(true);
                             toast.error(
-                              `Sitting capacity kam hai! ${preview.unseated.length} students baith nahi paaye. Kripya pehle aur halls select karein.`,
+                              `Insufficient seating capacity! ${preview.unseated.length} student(s) could not be seated. Please select more halls.`,
                             );
                           }}
                           className="h-9 text-xs font-bold gap-1.5 cursor-pointer shadow-sm"
                         >
-                          <AlertTriangle className="size-4" /> Sitting Kam Hai ({preview.unseated.length})
+                          <AlertTriangle className="size-4" /> Insufficient Capacity ({preview.unseated.length})
                         </Button>
                       ) : (
                         <Button
@@ -2220,16 +2220,16 @@ function SeatingPage() {
           <DialogHeader>
             <DialogTitle className="flex items-center gap-2 text-destructive">
               <AlertTriangle className="size-5 text-destructive" />
-              Sitting Capacity Kam Hai!
+              Insufficient Seating Capacity!
             </DialogTitle>
             <DialogDescription className="text-xs text-foreground font-medium pt-1">
               {preview?.unseated?.length ? (
                 <>
-                  <span className="text-destructive font-bold">{preview.unseated.length} student(s)</span> baith nahi paaye kyunki selected examination halls me seats kam pad gayi hain.
+                  <span className="text-destructive font-bold">{preview.unseated.length} student(s)</span> could not be seated because the selected examination halls lack sufficient capacity.
                 </>
               ) : (
                 <>
-                  Selected examination halls me total capacity required students se kam hai. Kripya aur halls add/select karein.
+                  The total capacity of selected examination halls is less than the required number of students. Please add or select more halls.
                 </>
               )}
             </DialogDescription>
@@ -2245,7 +2245,7 @@ function SeatingPage() {
               <span className="text-destructive">{selectedCapacity} Seats</span>
             </div>
             <div className="flex justify-between font-bold text-destructive border-t border-destructive/20 pt-1">
-              <span>Shortfall (Kitni Seats Kam Hain):</span>
+              <span>Shortfall (Seats Deficit):</span>
               <span>
                 {preview?.unseated?.length || Math.max(0, totalStudents - selectedCapacity)} Seats
               </span>

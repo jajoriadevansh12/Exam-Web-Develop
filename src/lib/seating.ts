@@ -315,7 +315,7 @@ export async function saveSeatingPlan(
 ) {
   if (result.unseated && result.unseated.length > 0) {
     throw new Error(
-      `Sitting capacity kam hai! ${result.unseated.length} students ke liye seats nahi hain. All students must be seated before saving the plan.`,
+      `Insufficient seating capacity! ${result.unseated.length} student(s) remain unseated. All students must have a seat before saving the plan.`,
     );
   }
 
@@ -880,7 +880,7 @@ export async function saveSeatingPlanForDate(
 
   if (result.unseated && result.unseated.length > 0) {
     throw new Error(
-      `Sitting capacity kam hai! ${result.unseated.length} students ke liye seats nahi hain. All students must be seated before saving the plan.`,
+      `Insufficient seating capacity! ${result.unseated.length} student(s) remain unseated. All students must have a seat before saving the plan.`,
     );
   }
 

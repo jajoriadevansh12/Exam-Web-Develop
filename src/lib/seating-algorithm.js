@@ -544,7 +544,7 @@ export function buildSeatingPlan(groups, rooms, strategy = "alternate", options 
       }
     } else {
       // --- Simple Sequential Seating (Column-wise) ---
-      // Ek class me saare same subject ke exam wale students column-wise sequentially baithaye jayenge.
+      // Students taking the same exam paper are seated column-wise sequentially.
       for (let col = 0; col < room.seats_per_row; col++) {
         if (seats.length >= target) break;
 
